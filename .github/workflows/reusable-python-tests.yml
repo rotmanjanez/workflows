@@ -10,30 +10,26 @@ name: 🐍 • Tests
 on:
   workflow_call:
     inputs:
-      runs-on:
-        description: "The platform to run the tests on"
-        required: true
-        type: string
-      python-version:
-        description: "The Python version to run the sessions for (e.g. '3.14'); empty lets the sessions pick"
-        default: ""
-        type: string
-      sessions:
-        description: "The Nox sessions to run for ready pull requests and non-pull-request events, formatted as a JSON array"
-        default: '["minimums", "tests"]'
+      compiled:
+        description: "Whether the project has a compiled extension; if so, tests install the built wheels"
+        default: false
+        type: boolean
+      python-versions:
+        description: "The Python versions to test, formatted as a JSON array, oldest first"
+        default: '["3.11", "3.12", "3.13", "3.14"]'
         type: string
       enable-coverage:
-        description: "Whether to measure coverage and upload the report as an artifact"
+        description: "Whether to measure coverage and upload it to Codecov"
         default: true
         type: boolean
+      fail-fast:
+        description: "Whether to cancel the remaining test jobs when one fails"
+        default: false
+        type: boolean
       timeout-minutes:
-        description: "The maximum time in minutes to allow the job to run before it is cancelled"
+        description: "The maximum time in minutes to allow a single test job to run"
         default: 30
         type: number
-      wheels-artifact:
-        description: "The artifact holding built wheels for this platform (e.g. '[dev-]cibw-wheels-<runs-on>'); empty builds from source"
-        default: ""
-        type: string
       setup-z3:
         description: "Whether to set up Z3"
         default: false
@@ -66,16 +62,68 @@ on:
         required: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-python-tests-${{ inputs.runs-on }}${{ inputs.python-version && format('-{0}', inputs.python-version) || '' }}-${{ join(fromJSON(inputs.sessions), '-') }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-python-tests
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  python-tests:
-    name: 🐍 ${{ inputs.runs-on }}${{ inputs.python-version && format(' {0}', inputs.python-version) || '' }}
-    runs-on: ${{ inputs.runs-on }}
+  setup:
+    name: 🧮 Matrix
+    # not `ubuntu-slim`: the minimal image does not ship a Python interpreter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        shell: python
+        env:
+          PYTHON_VERSIONS: ${{ inputs.python-versions }}
+          DRAFT: ${{ github.event.pull_request.draft || false }}
+          ENABLE_COVERAGE: ${{ inputs.enable-coverage }}
+        run: |
+          import json, os
+
+          RUNNERS = {
+              "linux": "ubuntu-24.04",
+              "linux-arm": "ubuntu-24.04-arm",
+              "macos": "macos-26",
+              "windows": "windows-2025",
+              "windows-arm": "windows-11-arm",
+          }
+
+          versions = json.loads(os.environ["PYTHON_VERSIONS"])
+          oldest, newest = versions[0], versions[-1]
+          bounds = [oldest] if oldest == newest else [oldest, newest]
+          coverage = os.environ["ENABLE_COVERAGE"] == "true"
+
+          def entry(platform, version, session, cover=False):
+              e = {"os": platform, "runs-on": RUNNERS[platform],
+                   "python-version": version, "session": session}
+              return e | {"coverage": True} if cover else e
+
+          if os.environ["DRAFT"] == "true":
+              matrix = [entry("linux", newest, "tests")]
+          else:
+              # only linux (x86) runs the full interpreter range
+              matrix = [entry(p, v, "tests", cover=coverage and p == "linux" and v == newest)
+                        for p in RUNNERS
+                        for v in (versions if p == "linux" else bounds)]
+              # a wrong lower bound already shows up on linux and windows (x86)
+              matrix += [entry(p, v, "minimums") for p in ("linux", "windows") for v in bounds]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={json.dumps({'include': matrix})}\n")
+
+  test:
+    name: 🐍 ${{ matrix.runs-on }} ${{ matrix.python-version }} ${{ matrix.session }}
+    needs: setup
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
       FORCE_COLOR: 3
@@ -85,6 +133,8 @@ jobs:
       AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      REPORT: ${{ matrix.coverage && format('coverage-{0}-{1}-{2}.xml', matrix.runs-on, matrix.python-version, matrix.session) || '' }}
+      WHEELS: ${{ inputs.compiled && format('{0}cibw-wheels-{1}', github.event_name == 'pull_request' && 'dev-' || '', matrix.runs-on) || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,17 +159,17 @@ jobs:
         with:
           prune-cache: true # setup-uv v10 no longer prunes by default
           # also exports `UV_PYTHON`, in sync with the `-p` the test step passes to nox
-          python-version: ${{ inputs.python-version }}
-          cache-suffix: ${{ inputs.python-version && format('{0}-', inputs.python-version) || '' }}${{ join(fromJSON(inputs.sessions), '-') }}
+          python-version: ${{ matrix.python-version }}
+          cache-suffix: ${{ matrix.python-version }}-${{ matrix.session }}
 
-      - if: ${{ inputs.wheels-artifact != '' }}
+      - if: ${{ env.WHEELS != '' }}
         name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ inputs.wheels-artifact }}
+          name: ${{ env.WHEELS }}
           path: ${{ runner.temp }}/wheelhouse
       # `UV_FIND_LINKS` only adds a source; the version pin keeps a stale wheelhouse from falling through to PyPI
-      - if: ${{ inputs.wheels-artifact != '' }}
+      - if: ${{ env.WHEELS != '' }}
         name: Install from the wheelhouse
         shell: bash
         run: |
@@ -137,31 +187,37 @@ jobs:
         # `bash` is required so that the environment variables are expanded on Windows, too
         shell: bash
         env:
-          PYTHON_VERSION: ${{ inputs.python-version }}
-          SESSIONS: ${{ join(fromJSON(inputs.sessions), ' ') }}
-          # not COVERAGE_FILE: coverage.py uses that for its own data file
-          COVERAGE_REPORT: ${{ inputs.enable-coverage && format('coverage-{0}{1}-{2}.xml', inputs.runs-on, inputs.python-version && format('-{0}', inputs.python-version) || '', join(fromJSON(inputs.sessions), '-')) || '' }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          SESSION: ${{ matrix.session }}
           NOX_DEFAULT_VENV_BACKEND: uv
         run: |
-          set -- -s $SESSIONS
-          if [ -n "$PYTHON_VERSION" ]; then
-            # a missing interpreter must fail the job, not skip the session
-            set -- "$@" -p "$PYTHON_VERSION" --error-on-missing-interpreters
-          fi
+          # a missing interpreter must fail the job, not skip the session
+          set -- -s "$SESSION" -p "$PYTHON_VERSION" --error-on-missing-interpreters
           if [ "$RUNNER_DEBUG" = "1" ]; then
             set -- "$@" --verbose
           fi
-          if [ -n "$COVERAGE_REPORT" ]; then
-            set -- "$@" -- --cov --cov-report="xml:$COVERAGE_REPORT" --cov-append
+          if [ -n "$REPORT" ]; then
+            set -- "$@" -- --cov --cov-report="xml:$REPORT" --cov-append
           fi
           uvx nox "$@"
 
       # upload the report as an artifact to GitHub so that it can later be uploaded to Codecov
-      - if: ${{ inputs.enable-coverage }}
-        name: Upload 🐍 coverage report for ${{ inputs.runs-on }}
+      - if: ${{ env.REPORT != '' }}
+        name: Upload 🐍 coverage report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-${{ inputs.runs-on }}${{ inputs.python-version && format('-{0}', inputs.python-version) || '' }}-${{ join(fromJSON(inputs.sessions), '-') }}
-          path: coverage-${{ inputs.runs-on }}${{ inputs.python-version && format('-{0}', inputs.python-version) || '' }}-${{ join(fromJSON(inputs.sessions), '-') }}.xml
+          name: coverage-${{ matrix.runs-on }}-${{ matrix.python-version }}-${{ matrix.session }}
+          path: ${{ env.REPORT }}
           if-no-files-found: error
           archive: false
+
+  coverage:
+    name: Coverage
+    needs: test
+    # drafts run no coverage entry, so there is no report to upload
+    if: ${{ inputs.enable-coverage && !github.event.pull_request.draft }}
+    uses: ./.github/workflows/reusable-python-coverage.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    permissions:
+      contents: read # Required for the `actions/checkout` action
+      id-token: write # Required for the `codecov/codecov-action` action

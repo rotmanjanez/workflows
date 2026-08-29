@@ -14,21 +14,14 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
 
 ### Added
 
-- ✨ Add `reusable-cpp-ci.yml` as an umbrella workflow that composes the granular
-  C++ workflows into the whole C++ CI pipeline, mirroring `reusable-python-ci.yml`.
-  It owns the platform and configuration matrix the C++ projects previously
-  spelled out job by job -- release on all five platforms, debug on the three
-  x86 ones, and drafts reduced to the Linux debug build -- and provides a stable
-  `🚦 Check` job for branch protection ([#445])
-- ✨ Reintroduce `reusable-python-ci.yml` as an umbrella workflow that composes
-  the granular workflows into the whole Python CI pipeline, including a stable
-  `🚦 Check` job for branch protection and a `python-versions` input for
-  projects that deviate from the default interpreter window ([#445])
-- ✨ Add a `wheels-artifact` input to `reusable-python-tests.yml` that installs
-  the package from prebuilt wheels, pinned to the exact version found in the
-  wheelhouse ([#445])
-- ✨ Add `python-version`, `enable-coverage`, and `timeout-minutes` inputs to
-  `reusable-python-tests.yml` ([#445])
+- ✨ Add `reusable-python-build.yml`, which owns the wheel build matrix and runs
+  the sdist, pure-Python wheel, and cibuildwheel builds ([#445])
+- ✨ Give `reusable-python-tests.yml` and `reusable-cpp-tests.yml` the matrices
+  their callers previously spelled out job by job, plus the coverage run that
+  followed them. A `python-versions` input covers projects that deviate from the
+  default interpreter window ([#445])
+- ✨ Install the package from prebuilt wheels in `reusable-python-tests.yml`,
+  pinned to the exact version found in the wheelhouse ([#445])
 
 ### Changed
 
@@ -41,8 +34,8 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
 - 🚸 Run one Python version and one Nox session per test job; the `minimums`
   session runs on Linux and Windows (x86) only, at the interpreter boundaries
   ([#445])
-- 🚸 Reduce draft pull requests to a single Linux wheel build and test job
-  without coverage in `reusable-python-ci.yml` ([#445])
+- 🚸 Reduce draft pull requests to a single Linux wheel build, a single Python
+  test job, and the Linux C++ debug build, all without coverage ([#445])
 - 🚸 Declare the full optional secret contract (`IQM_TOKEN`, `IQM_QC_ALIAS`, and
   the three AWS secrets) on every reusable workflow that reads them, for callers
   that cannot use `secrets: inherit` ([#445])

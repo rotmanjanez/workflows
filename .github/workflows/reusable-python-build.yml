@@ -1,0 +1,112 @@
+# Copyright (c) 2023 - 2026 Chair for Design Automation, TUM
+# Copyright (c) 2025 - 2026 Munich Quantum Software Company GmbH
+# All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License
+
+name: 🐍 • Build
+on:
+  workflow_call:
+    inputs:
+      compiled:
+        description: "Whether the project has a compiled extension; if so, wheels are built with cibuildwheel"
+        default: false
+        type: boolean
+      fail-fast:
+        description: "Whether to cancel the remaining wheel builds when one fails"
+        default: false
+        type: boolean
+      setup-z3:
+        description: "Whether to set up Z3"
+        default: false
+        type: boolean
+      z3-version:
+        description: "The version of Z3 to set up"
+        default: "4.13.4"
+        type: string
+      setup-mlir:
+        description: "Whether to set up MLIR"
+        default: false
+        type: boolean
+      llvm-version:
+        description: "The LLVM version to set up (formatted as 'major.minor.patch') or commit hash (minimum 7 characters, e.g., 'a832a52')"
+        default: "21.1.8"
+        type: string
+
+    # All optional, so that cross-organization callers (which cannot use
+    # `secrets: inherit`) can pass them explicitly.
+    secrets:
+      IQM_TOKEN:
+        required: false
+      IQM_QC_ALIAS:
+        required: false
+      AWS_S3_BUCKET:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    name: 🧮 Matrix
+    # not `ubuntu-slim`: the minimal image does not ship a Python interpreter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        shell: python
+        env:
+          DRAFT: ${{ github.event.pull_request.draft || false }}
+        run: |
+          import json, os
+
+          RUNNERS = {
+              "linux": "ubuntu-24.04",
+              "linux-arm": "ubuntu-24.04-arm",
+              "macos": "macos-26",
+              "windows": "windows-2025",
+              "windows-arm": "windows-11-arm",
+          }
+
+          if os.environ["DRAFT"] == "true":
+              matrix = [{"os": "linux", "runs-on": RUNNERS["linux"]}]
+          else:
+              matrix = [{"os": p, "runs-on": r} for p, r in RUNNERS.items()]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={json.dumps({'include': matrix})}\n")
+
+  sdist:
+    name: 📦 sdist
+    uses: ./.github/workflows/reusable-python-packaging-sdist.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
+  wheel:
+    name: 📦 wheel
+    if: ${{ !inputs.compiled }}
+    uses: ./.github/workflows/reusable-python-packaging-wheel-build.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
+  wheels:
+    name: 📦 ${{ matrix.os }}
+    needs: setup
+    if: ${{ inputs.compiled }}
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    uses: ./.github/workflows/reusable-python-packaging-wheel-cibuildwheel.yml
+    with:
+      runs-on: ${{ matrix.runs-on }}
+      setup-z3: ${{ inputs.setup-z3 }}
+      z3-version: ${{ inputs.z3-version }}
+      setup-mlir: ${{ inputs.setup-mlir }}
+      llvm-version: ${{ inputs.llvm-version }}
+    secrets: inherit # zizmor: ignore[secrets-inherit]

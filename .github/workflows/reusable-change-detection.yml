@@ -76,11 +76,8 @@ jobs:
             CMakeLists.txt
             cmake/**
             .github/codecov.yml
-            .github/workflows/reusable-cpp-tests-ubuntu.yml
-            .github/workflows/reusable-cpp-tests-macos.yml
-            .github/workflows/reusable-cpp-tests-windows.yml
+            .github/workflows/reusable-cpp-tests.yml
             .github/workflows/reusable-cpp-coverage.yml
-            .github/workflows/reusable-cpp-ci.yml
             .github/workflows/ci.yml
             ${{ env.ADDITIONAL_CPP_FILES }}
       - name: Set a flag for running the C++ tests
@@ -137,7 +134,7 @@ jobs:
             .github/codecov.yml
             .github/workflows/reusable-python-linter.yml
             .github/workflows/reusable-python-tests.yml
-            .github/workflows/reusable-python-ci.yml
+            .github/workflows/reusable-python-build.yml
             .github/workflows/ci.yml
             ${{ env.ADDITIONAL_PYTHON_FILES }}
       - name: Set a flag for running the Python tests
@@ -162,7 +159,6 @@ jobs:
             pyproject.toml
             uv.lock
             .github/workflows/reusable-python-linter.yml
-            .github/workflows/reusable-python-ci.yml
             .github/workflows/ci.yml
             .pre-commit-config.yaml
             ${{ env.ADDITIONAL_PYTHON_FILES }}

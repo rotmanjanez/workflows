@@ -6,60 +6,51 @@ of changes, including minor and patch releases, please refer to the
 
 ## [Unreleased]
 
-### One `reusable-cpp-tests.yml` replaces the three per-platform workflows
+### `reusable-cpp-tests.yml` replaces the three per-platform workflows and owns the matrix
 
 `reusable-cpp-tests-ubuntu.yml`, `reusable-cpp-tests-macos.yml`, and
-`reusable-cpp-tests-windows.yml` are gone. They shared everything but the
-compiler setup, so they are now a single `reusable-cpp-tests.yml` that derives
-the platform from `runs-on`:
+`reusable-cpp-tests-windows.yml` are gone. C++ tests are now a single job:
 
 ```yaml
 cpp-tests:
   name: 🇨 Test
-  strategy:
-    fail-fast: false
-    matrix:
-      include:
-        - runs-on: ubuntu-24.04
-          compiler: gcc
-        - runs-on: macos-latest
-        - runs-on: windows-latest
   uses: munich-quantum-toolkit/workflows/.github/workflows/reusable-cpp-tests.yml@v3
-  with:
-    runs-on: ${{ matrix.runs-on }}
-    compiler: ${{ matrix.compiler }}
-    preset-name: ${{ matrix.preset }}
+  secrets: inherit
+  permissions:
+    contents: read
+    id-token: write
 ```
+
+The platforms and configurations are no longer configurable. The workflow runs
+`release` on `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-26`, `windows-2025`, and
+`windows-11-arm`, plus `debug` on the three x86 ones, and picks the `-windows`
+preset suffix itself. Draft pull requests run the Linux `debug` build only. This
+is the matrix eight of the ten C++ projects already spelled out by hand.
+
+It also runs coverage, so `reusable-cpp-coverage.yml` no longer needs its own
+job; pass `enable-coverage: false` to opt out.
 
 Migrating a caller:
 
-- Point every `reusable-cpp-tests-<platform>.yml` job at
-  `reusable-cpp-tests.yml`. Where a matrix previously fanned out across three
-  separate jobs, one job with a `runs-on` matrix now covers all platforms.
-- `runs-on` is required and no longer has a default, because a single workflow
-  cannot carry a different default per platform. Pass it explicitly.
-- `compiler` now defaults to `''`, meaning the platform default (`gcc` on Linux,
-  Apple Clang on macOS, `msvc` on Windows). The previous per-platform defaults
-  resolve to exactly these, so omitting `compiler` is equivalent to before. An
-  invalid combination now fails the job instead of being ignored: `gcc` is
-  Linux-only, `gcc-XX` macOS-only, `clang-XX` Linux and macOS only.
-- `mlir-debug` is accepted on every platform, not just Windows.
-- Update branch protection: the job names now come from your own matrix rather
-  than from three differently named workflows.
+- Replace the `cpp-tests` matrix, its `runs-on`/`compiler`/`preset-name`/
+  `run-on-draft` inputs, and the `cpp-coverage` job with the job above.
+- `mlir-debug` is gone: only the Windows debug build needs a debug MLIR, and the
+  workflow derives that itself.
+- Update branch protection: job names now come from the workflow, not your matrix.
 
 On Windows, `compiler: clang` now actually builds with the ClangCL toolset (via
 `CMAKE_GENERATOR_TOOLSET`). The Windows workflow documented this behavior but
-never implemented it, so `compiler: clang` silently built with MSVC. Windows
-jobs that passed `clang` will change compilers as a result.
+never implemented it, so `compiler: clang` silently built with MSVC.
 
-### `reusable-python-ci.yml` owns the Python CI pipeline
+### `reusable-python-tests.yml` owns the test matrix
 
-Python CI is now a single job in a repository's `ci.yml`:
+Python tests are likewise a single job, with the same shape of change:
 
 ```yaml
-python:
-  name: 🐍
-  uses: munich-quantum-toolkit/workflows/.github/workflows/reusable-python-ci.yml@v3
+python-tests:
+  name: 🐍 Test
+  needs: python-build # only for projects with a compiled extension
+  uses: munich-quantum-toolkit/workflows/.github/workflows/reusable-python-tests.yml@v3
   with:
     compiled: true # only for projects with a compiled extension
   secrets: inherit
@@ -68,41 +59,35 @@ python:
     id-token: write
 ```
 
-It composes the granular workflows into the full pipeline (change detection,
-lint before tests, packaging, wheels, test matrix, coverage, all-green job).
+`python-versions` (default `'["3.11", "3.12", "3.13", "3.14"]'`, oldest first)
+sets the interpreter window; the shape of the matrix is not configurable. Linux
+(x86) runs every listed version, the other four platforms run the oldest and the
+newest, and `minimums` runs on Linux and Windows (x86) at those two boundaries.
+Drafts run one job on the newest interpreter. Coverage runs here too.
 
-The `python-versions` input (default `'["3.11", "3.12", "3.13", "3.14"]'`,
-oldest first) sets the interpreter window. The platforms and the shape of the
-matrix are not configurable: Linux (x86) runs every listed version, the other
-four platforms run the oldest and the newest, and `minimums` runs on Linux and
-Windows (x86) at those two boundaries. Draft pull requests run one Linux wheel
-build and one test job on the newest interpreter, and no coverage.
+`runs-on`, `python-version`, `sessions`, and `wheels-artifact` are gone. So is
+`draft-sessions`, which now fails the run instead of silently promoting drafts to
+the full matrix. Repository-specific sessions belong in a job of their own.
 
-Migrating a caller:
+Compiled projects pass `compiled: true` instead of `wheels-artifact`; the
+workflow derives the artifact name and needs `reusable-python-build.yml` to have
+run first.
 
-- Replace the Python jobs in `ci.yml` (`python-tests`, `python-linter`,
-  `python-coverage`, CI sdist/wheel builds) and their change-detection wiring
-  with the job above.
-- Require `🐍 / 🚦 Check` in branch protection.
-- Drop `PYTHON_ALL_VERSIONS` from `noxfile.py`; CI passes the version via `-p`.
-- Extra repository-specific sessions stay in the repository: add a separate job
-  calling `reusable-python-tests.yml` directly.
+### `reusable-python-build.yml` owns packaging
 
-### `reusable-python-tests.yml` runs one Python version per job
+The sdist, the pure-Python wheel, and the cibuildwheel fan-out are one job:
 
-The new `python-version` input runs exactly that version via Nox's `-p`, so
-callers matrix the version and get one job per (platform, version) pair instead
-of one job per platform looping over `PYTHON_ALL_VERSIONS`.
+```yaml
+python-build:
+  name: 🐍 Build
+  uses: munich-quantum-toolkit/workflows/.github/workflows/reusable-python-build.yml@v3
+  with:
+    compiled: true # only for projects with a compiled extension
+  secrets: inherit
+```
 
-- `sessions` entries must not carry a version suffix: `"tests"`, not
-  `"tests-3.14"`, and every listed session must exist for every matrixed
-  version. Pair a version-pinned session with its version via `matrix.include`.
-- `draft-sessions` is gone; passing it now fails the run instead of silently
-  promoting drafts to the full matrix. Shape the matrix instead to keep drafts
-  cheap (`reusable-python-ci.yml` does this for you).
-- New: `enable-coverage` (default `true`) and `timeout-minutes` (default `30`,
-  down from the previous hard-coded `60`). Coverage artifacts are named per
-  (platform, version, sessions) matrix entry.
+It replaces per-platform `reusable-python-packaging-wheel-cibuildwheel.yml` jobs
+and the separate sdist and wheel jobs. Drafts build the Linux wheel only.
 
 ### `reusable-python-tests.yml` tests prebuilt wheels instead of compiling
 

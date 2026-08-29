@@ -10,16 +10,13 @@ name: 🇨 • Tests
 on:
   workflow_call:
     inputs:
-      runs-on:
-        description: >
-          The runner image to use. Required, since the platform is derived from it.
-          This can be any valid Ubuntu, macOS, or Windows runner image, such as
-          'ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-15', 'macos-26-intel', or 'windows-2025'.
-        required: true
-        type: string
-      run-on-draft:
-        description: "Whether to run the tests for draft pull requests"
+      enable-coverage:
+        description: "Whether to measure coverage and upload it to Codecov"
         default: true
+        type: boolean
+      fail-fast:
+        description: "Whether to cancel the remaining test jobs when one fails"
+        default: false
         type: boolean
       compiler:
         description: >
@@ -47,14 +44,6 @@ on:
         description: "The LLVM version to set up (formatted as 'major.minor.patch') or commit hash (minimum 7 characters, e.g., 'a832a52')"
         default: "21.1.8"
         type: string
-      mlir-debug:
-        description: "Whether to use a debug build of MLIR"
-        default: false
-        type: boolean
-      preset-name:
-        description: "The CMake preset to use for configuration and build"
-        required: true
-        type: string
 
     # All optional, so that cross-organization callers (which cannot use
     # `secrets: inherit`) can pass them explicitly.
@@ -71,7 +60,7 @@ on:
         required: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-cpp-tests-${{ inputs.runs-on }}-${{ inputs.compiler }}-${{ inputs.preset-name }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-cpp-tests
   cancel-in-progress: true
 
 permissions:
@@ -82,10 +71,53 @@ defaults:
     shell: bash
 
 jobs:
+  setup:
+    name: 🧮 Matrix
+    # not `ubuntu-slim`: the minimal image does not ship a Python interpreter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        shell: python
+        env:
+          DRAFT: ${{ github.event.pull_request.draft || false }}
+        run: |
+          import json, os
+
+          RUNNERS = {
+              "linux": "ubuntu-24.04",
+              "linux-arm": "ubuntu-24.04-arm",
+              "macos": "macos-26",
+              "windows": "windows-2025",
+              "windows-arm": "windows-11-arm",
+          }
+          # release covers every platform, debug the three x86 ones
+          DEBUG_ON = ("linux", "macos", "windows")
+
+          def entry(platform, config):
+              # only the Windows presets carry a suffix, because the generator differs
+              suffix = "-windows" if platform.startswith("windows") else ""
+              return {"os": platform, "runs-on": RUNNERS[platform],
+                      "config": config, "preset": f"{config}{suffix}"}
+
+          if os.environ["DRAFT"] == "true":
+              matrix = [entry("linux", "debug")]
+          else:
+              matrix = ([entry(p, "release") for p in RUNNERS]
+                        + [entry(p, "debug") for p in DEBUG_ON])
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={json.dumps({'include': matrix})}\n")
+
   cpp-tests:
-    if: ${{ !github.event.pull_request.draft || inputs.run-on-draft }}
-    name: ${{ startsWith(inputs.runs-on, 'ubuntu') && '🐧' || startsWith(inputs.runs-on, 'macos') && '🍎' || '🏁' }} ${{ inputs.runs-on }} ${{ inputs.compiler }} ${{ inputs.preset-name }}
-    runs-on: ${{ inputs.runs-on }}
+    name: ${{ startsWith(matrix.runs-on, 'ubuntu') && '🐧' || startsWith(matrix.runs-on, 'macos') && '🍎' || '🏁' }} ${{ matrix.runs-on }} ${{ matrix.config }}
+    needs: setup
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.runs-on }}
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 4
       CTEST_PARALLEL_LEVEL: 4
@@ -113,7 +145,9 @@ jobs:
         uses: munich-quantum-software/setup-mlir@3f32263ce571a8b745068980f30f188b6e800763 # v1.4.2
         with:
           llvm-version: ${{ inputs.llvm-version }}
-          debug: ${{ inputs.mlir-debug }}
+          # only Windows needs a matching debug MLIR: mixing a debug build against
+          # a release LLVM breaks on the MSVC debug runtime, but is fine elsewhere
+          debug: ${{ startsWith(matrix.os, 'windows') && matrix.config == 'debug' }}
 
       - name: Set up mold as linker
         if: ${{ runner.os == 'Linux' }}
@@ -135,8 +169,8 @@ jobs:
           path: ${{ runner.temp }}/sccache
           # keyed per runner image, compiler, and preset, since objects cached by
           # one toolchain are useless to another
-          key: sccache-cpp-tests-${{ inputs.runs-on }}-${{ inputs.compiler }}-${{ inputs.preset-name }}-${{ github.run_id }}
-          restore-keys: sccache-cpp-tests-${{ inputs.runs-on }}-${{ inputs.compiler }}-${{ inputs.preset-name }}-
+          key: sccache-cpp-tests-${{ matrix.runs-on }}-${{ inputs.compiler }}-${{ matrix.preset }}-${{ github.run_id }}
+          restore-keys: sccache-cpp-tests-${{ matrix.runs-on }}-${{ inputs.compiler }}-${{ matrix.preset }}-
 
       - name: Use sccache as the compiler launcher
         if: ${{ runner.os != 'Windows' }}
@@ -252,18 +286,18 @@ jobs:
 
       - name: Configure CMake
         env:
-          PRESET_NAME: ${{ inputs.preset-name }}
+          PRESET_NAME: ${{ matrix.preset }}
         run: cmake --preset "$PRESET_NAME"
 
       - name: Build
         timeout-minutes: 60
         env:
-          PRESET_NAME: ${{ inputs.preset-name }}
+          PRESET_NAME: ${{ matrix.preset }}
         run: cmake --build --preset "$PRESET_NAME"
 
       - name: Test
         env:
-          PRESET_NAME: ${{ inputs.preset-name }}
+          PRESET_NAME: ${{ matrix.preset }}
         run: ctest --preset "$PRESET_NAME"
 
       # sccache flushes lazily, so the server must be stopped before the cache is
@@ -275,3 +309,19 @@ jobs:
         run: |
           sccache --show-stats || true
           sccache --stop-server || true
+
+  coverage:
+    name: Coverage
+    needs: cpp-tests
+    # drafts run a single build, and coverage is not worth their extra minutes
+    if: ${{ inputs.enable-coverage && !github.event.pull_request.draft }}
+    uses: ./.github/workflows/reusable-cpp-coverage.yml
+    with:
+      setup-z3: ${{ inputs.setup-z3 }}
+      z3-version: ${{ inputs.z3-version }}
+      setup-mlir: ${{ inputs.setup-mlir }}
+      llvm-version: ${{ inputs.llvm-version }}
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    permissions:
+      contents: read # Required for the `actions/checkout` action
+      id-token: write # Required for the `codecov/codecov-action` action
