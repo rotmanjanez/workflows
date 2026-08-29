@@ -111,12 +111,16 @@ jobs:
       # run cibuildwheel to build wheels for the specified Python version
       - uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
 
-      # sccache flushes lazily, so the server must be stopped before the cache is saved
+      # sccache flushes lazily, so the server must be stopped before the cache is saved.
+      # cibuildwheel builds each interpreter in its own environment and the server may
+      # already be gone by the time this runs (regularly the case on Windows), so a
+      # failure here means there is nothing left to flush -- never that the job failed.
       - name: Show sccache stats and stop the server
         if: ${{ always() && !startsWith(inputs.runs-on, 'ubuntu') }}
+        continue-on-error: true
         run: |
-          sccache --show-stats
-          sccache --stop-server
+          sccache --show-stats || true
+          sccache --stop-server || true
 
       - name: Verify clean directory
         run: git diff --exit-code
