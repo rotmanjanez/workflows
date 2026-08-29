@@ -53,6 +53,14 @@ compilation that writes a separate PDB. This requires `CMP0141` to be `NEW`
 (that is, `cmake_minimum_required(VERSION 3.25)` or later); on an older policy
 the setting is ignored and Windows Debug builds simply stay uncached.
 
+They are also configured with `-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`,
+which keeps the release CRT in Debug (needs `CMP0091` to be `NEW`). That is what
+lets the Debug build link against the release MLIR, as every other platform
+already did, so no debug MLIR is downloaded any more. The MSVC debug CRT is what
+made a matching debug MLIR necessary; with the release CRT the mismatch is gone.
+Note that this turns off MSVC iterator debugging, which the Linux and macOS
+Debug builds never had either.
+
 On Windows, `compiler: clang` now actually builds with clang-cl. The Windows
 workflow documented this behavior but never implemented it, so `compiler: clang`
 silently built with MSVC. It was briefly implemented via

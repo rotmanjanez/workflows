@@ -48,6 +48,9 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   `reusable-cpp-tests.yml`, so sccache covers Windows too. Debug builds embed
   their debug info (`/Z7`), which sccache can cache, unlike a separate PDB
   ([#445])
+- ⚡️ Link the Windows C++ debug tests against the release MLIR, like every other
+  platform already did, by keeping the release CRT in Debug. This drops the
+  debug MLIR download and shrinks the link inputs ([#445])
 - ⚡️ Save the pruned, uniquely-keyed uv caches on every run instead of only on
   `main` ([#445])
 - 🐛 Make the coverage artifact name in `reusable-python-tests.yml` unique per

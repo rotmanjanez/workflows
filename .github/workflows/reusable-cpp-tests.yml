@@ -215,7 +215,11 @@ jobs:
           # what CMake asks for by default in Debug. Embedding the debug info in
           # the objects (/Z7) keeps every translation unit cacheable. Needs
           # CMP0141 to be NEW, so it is ignored by projects on an older policy.
-          echo "CMAKE_CONFIGURE_ARGS=-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded" >> "$GITHUB_ENV"
+          args="-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          # Keep the release CRT in Debug so the build links against the release
+          # MLIR, like every other platform does. Needs CMP0091 to be NEW.
+          args="$args -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"
+          echo "CMAKE_CONFIGURE_ARGS=$args" >> "$GITHUB_ENV"
 
       - name: Set up Z3
         if: ${{ inputs.setup-z3 }}
@@ -228,9 +232,6 @@ jobs:
         uses: munich-quantum-software/setup-mlir@3f32263ce571a8b745068980f30f188b6e800763 # v1.4.2
         with:
           llvm-version: ${{ inputs.llvm-version }}
-          # only Windows needs a matching debug MLIR: mixing a debug build against
-          # a release LLVM breaks on the MSVC debug runtime, but is fine elsewhere
-          debug: ${{ startsWith(matrix.os, 'windows') && matrix.config == 'debug' }}
 
       - name: Set up mold as linker
         if: ${{ runner.os == 'Linux' }}
