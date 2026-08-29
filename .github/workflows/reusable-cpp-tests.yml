@@ -128,13 +128,9 @@ jobs:
 
       # sccache is skipped on Windows: the Visual Studio generator ignores
       # CMAKE_<LANG>_COMPILER_LAUNCHER, so there is nothing to hook it into.
-      # A cache written on a branch can only be read by that branch, so saving from
-      # a pull request produces an entry nobody else will ever hit while evicting
-      # the default branch's entries that every pull request *can* read. Restore
-      # everywhere, save only on the default branch.
-      - name: Restore compiler cache
+      - name: Set up compiler cache
         if: ${{ runner.os != 'Windows' }}
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache
           # keyed per runner image, compiler, and preset, since objects cached by
@@ -279,11 +275,3 @@ jobs:
         run: |
           sccache --show-stats || true
           sccache --stop-server || true
-
-      - name: Save compiler cache
-        if: ${{ always() && runner.os != 'Windows'
-          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/sccache
-          key: sccache-cpp-tests-${{ inputs.runs-on }}-${{ inputs.compiler }}-${{ inputs.preset-name }}-${{ github.run_id }}

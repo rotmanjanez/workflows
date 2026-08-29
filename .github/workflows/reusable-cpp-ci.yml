@@ -21,11 +21,12 @@ on:
         type: boolean
       clang-version:
         description: "The major version of clang-tidy and clang-format to lint with"
-        default: 18
+        # the oldest version any project currently pins; newer ones only add checks
+        default: 20
         type: number
       cpp-linter-extra-args:
         description: "Additional arguments to pass to clang-tidy and clang-format"
-        default: "-std=c++17"
+        default: "-std=c++20"
         type: string
       cpp-linter-ignore-extra:
         description: "Additional paths (one per line) for the linter to ignore"
@@ -104,34 +105,33 @@ jobs:
         run: |
           import json, os
 
-          # The platforms and their default compilers are ecosystem policy and
-          # live here and nowhere else.
-          PLATFORMS = {
-              "linux": ("ubuntu-24.04", "gcc"),
-              "linux-arm": ("ubuntu-24.04-arm", "gcc"),
-              "macos": ("macos-26", "clang"),
-              "windows": ("windows-2025", "msvc"),
-              "windows-arm": ("windows-11-arm", "msvc"),
+          # The platforms and configurations are ecosystem policy and live here
+          # and nowhere else. This is the matrix eight of the ten C++ projects
+          # already spelled out by hand, one entry at a time.
+          RUNNERS = {
+              "linux": "ubuntu-24.04",
+              "linux-arm": "ubuntu-24.04-arm",
+              "macos": "macos-26",
+              "windows": "windows-2025",
+              "windows-arm": "windows-11-arm",
           }
-          # Windows presets carry a suffix because the generator differs there.
-          PRESET = lambda platform, config: (
-              f"{config}-windows" if platform.startswith("windows") else config
-          )
-          # Release catches optimization-dependent bugs, debug catches assertions.
-          # The arm runners are the scarce ones, so they only carry release.
+          # Release covers every platform; debug covers the three x86 ones, where
+          # the assertions it enables are worth the build time.
           DEBUG_ON = ("linux", "macos", "windows")
 
           def entry(platform, config):
-              runner, compiler = PLATFORMS[platform]
-              return {"os": platform, "runs-on": runner, "compiler": compiler,
-                      "config": config, "preset": PRESET(platform, config)}
+              # only the Windows presets carry a suffix, because the generator differs
+              suffix = "-windows" if platform.startswith("windows") else ""
+              return {"os": platform, "runs-on": RUNNERS[platform],
+                      "config": config, "preset": f"{config}{suffix}"}
 
+          debug = [entry(p, "debug") for p in DEBUG_ON]
+          # Drafts run the debug builds only: they catch the most per minute spent,
+          # and this is the split the projects' `run-on-draft` flags already encoded.
           if os.environ["DRAFT"] == "true":
-              # one cheap assertion-checking build is the whole draft signal
-              test = [entry("linux", "debug")]
+              test = debug
           else:
-              test = [entry(p, "release") for p in PLATFORMS]
-              test += [entry(p, "debug") for p in DEBUG_ON]
+              test = [entry(p, "release") for p in RUNNERS] + debug
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"test={json.dumps({'include': test})}\n")
@@ -172,7 +172,6 @@ jobs:
     uses: ./.github/workflows/reusable-cpp-tests.yml
     with:
       runs-on: ${{ matrix.runs-on }}
-      compiler: ${{ matrix.compiler }}
       preset-name: ${{ matrix.preset }}
       # the matrix already decided what a draft runs, so nothing is filtered below
       run-on-draft: true
@@ -188,7 +187,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [gate, test]
-    # drafts run a single build and no coverage entry, so there is nothing to upload
+    # drafts run the debug builds only, and coverage is not worth their extra minutes
     if: >-
       ${{ !cancelled()
       && needs.test.result == 'success'
