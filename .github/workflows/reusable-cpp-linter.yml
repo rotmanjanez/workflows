@@ -124,7 +124,7 @@ jobs:
           sudo apt-get install -y ccache
           {
             echo "CCACHE_DIR=$RUNNER_TEMP/ccache"
-            echo "CCACHE_MAXSIZE=2G"
+            echo "CCACHE_MAXSIZE=1G"
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
           } >> "$GITHUB_ENV"
@@ -216,3 +216,11 @@ jobs:
       - name: Fail if linter found errors
         if: steps.linter.outputs.checks-failed > 0
         run: echo "Linter found errors" && exit 1
+
+      - name: Save compiler cache
+        if: ${{ always()
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-cpp-lint-${{ github.run_id }}

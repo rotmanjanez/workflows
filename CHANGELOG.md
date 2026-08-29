@@ -14,6 +14,9 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
 
 ### Added
 
+- ✨ Add `reusable-cpp-ci.yml` as an umbrella workflow that composes the granular
+  C++ workflows into the whole C++ CI pipeline, mirroring `reusable-python-ci.yml`,
+  including a stable `🚦 Check` job for branch protection ([#445])
 - ✨ Reintroduce `reusable-python-ci.yml` as an umbrella workflow that composes
   the granular workflows into the whole Python CI pipeline, including a stable
   `🚦 Check` job for branch protection and a `python-versions` input for
@@ -43,6 +46,14 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
 - ⚡️ Cap the compiler caches and share them through run-id-keyed Actions cache
   entries in `reusable-python-packaging-wheel-cibuildwheel.yml`,
   `reusable-cpp-coverage.yml`, and `reusable-cpp-linter.yml` ([#445])
+- ⚡️ Cache the C++ test builds with sccache in `reusable-cpp-tests.yml`, which
+  was the only compiling workflow without a compiler cache. Windows is excluded:
+  the Visual Studio generator ignores `CMAKE_<LANG>_COMPILER_LAUNCHER` ([#445])
+- ⚡️ Restore the compiler caches everywhere but save them only on the default
+  branch. A cache written on a branch can only be read by that branch, so saving
+  from a pull request wrote an entry nobody would hit while evicting the entries
+  every pull request *can* read -- the overflow that motivated removing the C++
+  caches in the first place ([#445])
 - ⚡️ Save the pruned, uniquely-keyed uv caches on every run instead of only on
   `main` ([#445])
 - 🐛 Make the coverage artifact name in `reusable-python-tests.yml` unique per

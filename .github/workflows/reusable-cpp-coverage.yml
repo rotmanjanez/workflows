@@ -83,8 +83,10 @@ jobs:
         with:
           llvm-version: ${{ inputs.llvm-version }}
 
-      - name: Set up compiler cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # restore everywhere, save only on the default branch: a cache written on a
+      # branch is readable only by that branch
+      - name: Restore compiler cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ccache
           key: ccache-cpp-coverage-${{ github.run_id }}
@@ -96,7 +98,7 @@ jobs:
           sudo apt-get install -y ccache
           {
             echo "CCACHE_DIR=$RUNNER_TEMP/ccache"
-            echo "CCACHE_MAXSIZE=2G"
+            echo "CCACHE_MAXSIZE=1G"
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
           } >> "$GITHUB_ENV"
@@ -135,3 +137,11 @@ jobs:
           fail_ci_if_error: true
           flags: cpp
           use_oidc: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
+
+      - name: Save compiler cache
+        if: ${{ always()
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-cpp-coverage-${{ github.run_id }}

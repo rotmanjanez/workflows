@@ -90,9 +90,11 @@ jobs:
           enable-cache: ${{ !startsWith(inputs.runs-on, 'ubuntu') }}
 
       # set up sccache for faster builds (non-Ubuntu only: manylinux containers cannot reach a host sccache)
-      - name: Set up compiler cache
+      # restore everywhere, save only on the default branch: a cache written on a
+      # branch is readable only by that branch
+      - name: Restore compiler cache
         if: ${{ !startsWith(inputs.runs-on, 'ubuntu') }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache
           key: sccache-wheels-${{ inputs.runs-on }}-${{ github.run_id }}
@@ -121,6 +123,14 @@ jobs:
         run: |
           sccache --show-stats || true
           sccache --stop-server || true
+
+      - name: Save compiler cache
+        if: ${{ always() && !startsWith(inputs.runs-on, 'ubuntu')
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sccache
+          key: sccache-wheels-${{ inputs.runs-on }}-${{ github.run_id }}
 
       - name: Verify clean directory
         run: git diff --exit-code
