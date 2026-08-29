@@ -51,6 +51,8 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
 - ⚡️ Link the Windows C++ debug tests against the release MLIR, like every other
   platform already did, by keeping the release CRT in Debug. This drops the
   debug MLIR download and shrinks the link inputs ([#445])
+- ⚡️ Raise the sccache budget in `reusable-cpp-tests.yml` to 1G, which the
+  Windows debug build filled exactly ([#445])
 - ⚡️ Save the pruned, uniquely-keyed uv caches on every run instead of only on
   `main` ([#445])
 - 🐛 Make the coverage artifact name in `reusable-python-tests.yml` unique per

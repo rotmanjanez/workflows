@@ -258,7 +258,7 @@ jobs:
           uv tool install sccache
           {
             echo "SCCACHE_DIR=$RUNNER_TEMP/sccache"
-            echo "SCCACHE_CACHE_SIZE=400M"
+            echo "SCCACHE_CACHE_SIZE=1G"
             echo "CMAKE_C_COMPILER_LAUNCHER=sccache"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache"
           } >> "$GITHUB_ENV"
