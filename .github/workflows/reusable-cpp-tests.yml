@@ -126,6 +126,29 @@ jobs:
           activate-environment: true
           enable-cache: false
 
+      # sccache is skipped on Windows: the Visual Studio generator ignores
+      # CMAKE_<LANG>_COMPILER_LAUNCHER, so there is nothing to hook it into.
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sccache
+          # keyed per runner image, compiler, and preset, since objects cached by
+          # one toolchain are useless to another
+          key: sccache-cpp-tests-${{ inputs.runs-on }}-${{ inputs.compiler }}-${{ inputs.preset-name }}-${{ github.run_id }}
+          restore-keys: sccache-cpp-tests-${{ inputs.runs-on }}-${{ inputs.compiler }}-${{ inputs.preset-name }}-
+
+      - name: Use sccache as the compiler launcher
+        if: ${{ runner.os != 'Windows' }}
+        run: |
+          uv tool install sccache
+          {
+            echo "SCCACHE_DIR=$RUNNER_TEMP/sccache"
+            echo "SCCACHE_CACHE_SIZE=1G"
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          } >> "$GITHUB_ENV"
+
       # Windows builds with the Visual Studio generator, which ships its own build tool.
       - name: Install Ninja
         if: ${{ runner.os != 'Windows' }}
@@ -242,3 +265,13 @@ jobs:
         env:
           PRESET_NAME: ${{ inputs.preset-name }}
         run: ctest --preset "$PRESET_NAME"
+
+      # sccache flushes lazily, so the server must be stopped before the cache is
+      # saved. A failure here means the server is already gone and there is
+      # nothing left to flush -- never that the job failed.
+      - name: Show sccache stats and stop the server
+        if: ${{ always() && runner.os != 'Windows' }}
+        continue-on-error: true
+        run: |
+          sccache --show-stats || true
+          sccache --stop-server || true
