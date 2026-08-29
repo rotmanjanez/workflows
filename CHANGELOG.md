@@ -18,7 +18,7 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   C++ workflows into the whole C++ CI pipeline, mirroring `reusable-python-ci.yml`.
   It owns the platform and configuration matrix the C++ projects previously
   spelled out job by job -- release on all five platforms, debug on the three
-  x86 ones, and drafts reduced to the debug builds -- and provides a stable
+  x86 ones, and drafts reduced to the Linux debug build -- and provides a stable
   `🚦 Check` job for branch protection ([#445])
 - ✨ Reintroduce `reusable-python-ci.yml` as an umbrella workflow that composes
   the granular workflows into the whole Python CI pipeline, including a stable

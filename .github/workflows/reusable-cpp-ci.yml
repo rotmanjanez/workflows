@@ -125,13 +125,13 @@ jobs:
               return {"os": platform, "runs-on": RUNNERS[platform],
                       "config": config, "preset": f"{config}{suffix}"}
 
-          debug = [entry(p, "debug") for p in DEBUG_ON]
-          # Drafts run the debug builds only: they catch the most per minute spent,
-          # and this is the split the projects' `run-on-draft` flags already encoded.
+          # Drafts run the one entry that catches the most per minute spent: the
+          # Linux debug build, whose assertions fire on any platform.
           if os.environ["DRAFT"] == "true":
-              test = debug
+              test = [entry("linux", "debug")]
           else:
-              test = [entry(p, "release") for p in RUNNERS] + debug
+              test = ([entry(p, "release") for p in RUNNERS]
+                      + [entry(p, "debug") for p in DEBUG_ON])
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"test={json.dumps({'include': test})}\n")
@@ -187,7 +187,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [gate, test]
-    # drafts run the debug builds only, and coverage is not worth their extra minutes
+    # drafts run a single build, and coverage is not worth their extra minutes
     if: >-
       ${{ !cancelled()
       && needs.test.result == 'success'
