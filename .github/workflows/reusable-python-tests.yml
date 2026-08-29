@@ -14,13 +14,25 @@ on:
         description: "The platform to run the tests on"
         required: true
         type: string
+      python-version:
+        description: "The Python version to run the sessions for (e.g. '3.14'); empty lets the sessions pick"
+        default: ""
+        type: string
       sessions:
         description: "The Nox sessions to run for ready pull requests and non-pull-request events, formatted as a JSON array"
         default: '["minimums", "tests"]'
         type: string
-      draft-sessions:
-        description: "The Nox sessions to run for draft pull requests, formatted as a JSON array"
-        default: '["tests-3.14"]'
+      enable-coverage:
+        description: "Whether to measure coverage and upload the report as an artifact"
+        default: true
+        type: boolean
+      timeout-minutes:
+        description: "The maximum time in minutes to allow the job to run before it is cancelled"
+        default: 30
+        type: number
+      wheels-artifact:
+        description: "The artifact holding built wheels for this platform (e.g. '[dev-]cibw-wheels-<runs-on>'); empty builds from source"
+        default: ""
         type: string
       setup-z3:
         description: "Whether to set up Z3"
@@ -39,8 +51,22 @@ on:
         default: "21.1.8"
         type: string
 
+    # All optional, so that cross-organization callers (which cannot use
+    # `secrets: inherit`) can pass them explicitly.
+    secrets:
+      IQM_TOKEN:
+        required: false
+      IQM_QC_ALIAS:
+        required: false
+      AWS_S3_BUCKET:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-python-tests-${{ inputs.runs-on }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-python-tests-${{ inputs.runs-on }}${{ inputs.python-version && format('-{0}', inputs.python-version) || '' }}-${{ join(fromJSON(inputs.sessions), '-') }}
   cancel-in-progress: true
 
 permissions:
@@ -48,8 +74,9 @@ permissions:
 
 jobs:
   python-tests:
-    name: 🐍 ${{ inputs.runs-on }}
+    name: 🐍 ${{ inputs.runs-on }}${{ inputs.python-version && format(' {0}', inputs.python-version) || '' }}
     runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
       FORCE_COLOR: 3
       GITHUB_TOKEN: ${{ github.token }}
@@ -59,111 +86,11 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
-      # free up space on the runners
-      # the nox environments can get quite large, especially if torch is installed
-      - name: Free up space (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/lib/android/sdk || true
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/share/swift || true
-      - name: Free up space (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          sudo rm -rf /usr/local/share/android-sdk || true
-          sudo rm -rf /usr/local/share/dotnet || true
-          sudo rm -rf /usr/share/swift || true
-      - name: Free up space (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          Remove-Item -Recurse -Force "C:\Android\android-sdk" -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force "C:\Program Files\ghc" -ErrorAction SilentlyContinue
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Set up MSVC
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $vsArch = switch ($env:RUNNER_ARCH) {
-            'X64' { 'amd64' }
-            'ARM64' { 'arm64' }
-            default { throw "Unsupported Windows runner architecture: $env:RUNNER_ARCH" }
-          }
-          $component = switch ($env:RUNNER_ARCH) {
-            'X64' { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
-            'ARM64' { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' }
-          }
-
-          $candidates = @(
-            if (${env:ProgramFiles(x86)}) {
-              Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-            }
-            if ($env:ProgramFiles) {
-              Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe'
-            }
-            Get-Command vswhere.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-          )
-          $vswhere = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-          if (-not $vswhere) {
-            throw 'vswhere.exe not found'
-          }
-
-          $vsPath = (& $vswhere -latest -products '*' -prerelease -requires $component -property installationPath | Select-Object -First 1)
-          if (-not $vsPath) {
-            throw "Visual Studio with $component not found"
-          }
-          $devShell = Join-Path $vsPath 'Common7\Tools\Launch-VsDevShell.ps1'
-          if (-not (Test-Path $devShell)) {
-            throw "Developer shell not found: $devShell"
-          }
-
-          $before = @{}
-          Get-ChildItem Env: | ForEach-Object { $before[$_.Name] = $_.Value }
-          $devShellArguments = @{
-            Arch = $vsArch
-            SkipAutomaticLocation = $true
-          }
-          if ($env:RUNNER_ARCH -eq 'X64') {
-            $devShellArguments.HostArch = 'amd64'
-          }
-          & $devShell @devShellArguments
-
-          $compiler = (Get-Command cl.exe -ErrorAction Stop).Source
-          $expected = if ($env:RUNNER_ARCH -eq 'ARM64') { '\Hostarm64\arm64\' } else { '\Hostx64\x64\' }
-          if ($compiler -notmatch [regex]::Escape($expected)) {
-            throw "Unexpected MSVC compiler for $($env:RUNNER_ARCH): $compiler"
-          }
-          Write-Host "Using $compiler"
-
-          Get-ChildItem Env: | ForEach-Object {
-            if (
-              (!$before.ContainsKey($_.Name) -or $before[$_.Name] -cne $_.Value) -and
-              $_.Name -notmatch '^(GITHUB_|RUNNER_)' -and
-              $_.Name -ne 'NODE_OPTIONS'
-            ) {
-              $delimiter = "ghadelimiter_$([guid]::NewGuid().ToString('N'))"
-              Add-Content -Path $env:GITHUB_ENV -Value "$($_.Name)<<$delimiter" -Encoding utf8
-              Add-Content -Path $env:GITHUB_ENV -Value $_.Value -Encoding utf8
-              Add-Content -Path $env:GITHUB_ENV -Value $delimiter -Encoding utf8
-            }
-          }
-
-      - name: Configure Windows native builds
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
 
       - name: Set up Z3
         if: ${{ inputs.setup-z3 }}
@@ -177,43 +104,64 @@ jobs:
         with:
           llvm-version: ${{ inputs.llvm-version }}
 
-      - name: Set up mold as linker (Linux only)
-        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          prune-cache: true # setup-uv v10 no longer prunes by default
+          # also exports `UV_PYTHON`, in sync with the `-p` the test step passes to nox
+          python-version: ${{ inputs.python-version }}
+          cache-suffix: ${{ inputs.python-version && format('{0}-', inputs.python-version) || '' }}${{ join(fromJSON(inputs.sessions), '-') }}
 
-      # set up sccache for faster builds
-      - name: Install sccache
-        run: uv tool install sccache
+      - if: ${{ inputs.wheels-artifact != '' }}
+        name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.wheels-artifact }}
+          path: ${{ runner.temp }}/wheelhouse
+      # `UV_FIND_LINKS` only adds a source; the version pin keeps a stale wheelhouse from falling through to PyPI
+      - if: ${{ inputs.wheels-artifact != '' }}
+        name: Install from the wheelhouse
+        shell: bash
+        run: |
+          info=$(uv run --no-project --python 3.13 python -c 'import pathlib, re, sys, tomllib; p = tomllib.loads(pathlib.Path("pyproject.toml").read_text()).get("project", {}); name = p.get("name") or sys.exit("pyproject.toml has no [project].name"); c = re.sub(r"[-_.]+", "_", name).lower(); v = sorted({f.name.split("-")[1] for f in pathlib.Path(sys.argv[1]).glob("*.whl") if f.name.split("-")[0].lower() == c}); sys.exit(f"no {name} wheel in the wheelhouse: the artifact is empty or holds another project") if not v else None; sys.exit(f"the wheelhouse holds several {name} versions: {v}") if len(v) > 1 else None; print(name, v[0])' "$RUNNER_TEMP/wheelhouse")
+          read -r name version <<< "$info"
+          echo "Testing $name==$version from the wheelhouse"
+          echo "$name==$version" > "$RUNNER_TEMP/wheelhouse-constraint.txt"
+          {
+            echo "UV_FIND_LINKS=$RUNNER_TEMP/wheelhouse"
+            echo "UV_NO_BUILD_PACKAGE=$name"
+            echo "UV_CONSTRAINT=$RUNNER_TEMP/wheelhouse-constraint.txt"
+          } >> "$GITHUB_ENV"
 
-      - if: ${{ !github.event.pull_request.draft }}
-        name: 🐍 Test
-        # `bash` is required so that `$RUNS_ON` is expanded on Windows, too
+      - name: 🐍 Test
+        # `bash` is required so that the environment variables are expanded on Windows, too
         shell: bash
         env:
-          RUNS_ON: ${{ inputs.runs-on }}
+          PYTHON_VERSION: ${{ inputs.python-version }}
           SESSIONS: ${{ join(fromJSON(inputs.sessions), ' ') }}
-        run: uvx nox -s $SESSIONS --verbose -- --cov --cov-report=xml:coverage-$RUNS_ON.xml --cov-append
-
-      - if: ${{ github.event.pull_request.draft }}
-        name: 🐍 Test
-        # `bash` is required so that `$RUNS_ON` is expanded on Windows, too
-        shell: bash
-        env:
-          RUNS_ON: ${{ inputs.runs-on }}
-          SESSIONS: ${{ join(fromJSON(inputs.draft-sessions), ' ') }}
-        run: uvx nox -s $SESSIONS --verbose -- --cov --cov-report=xml:coverage-$RUNS_ON.xml --cov-append
+          # not COVERAGE_FILE: coverage.py uses that for its own data file
+          COVERAGE_REPORT: ${{ inputs.enable-coverage && format('coverage-{0}{1}-{2}.xml', inputs.runs-on, inputs.python-version && format('-{0}', inputs.python-version) || '', join(fromJSON(inputs.sessions), '-')) || '' }}
+          NOX_DEFAULT_VENV_BACKEND: uv
+        run: |
+          set -- -s $SESSIONS
+          if [ -n "$PYTHON_VERSION" ]; then
+            # a missing interpreter must fail the job, not skip the session
+            set -- "$@" -p "$PYTHON_VERSION" --error-on-missing-interpreters
+          fi
+          if [ "$RUNNER_DEBUG" = "1" ]; then
+            set -- "$@" --verbose
+          fi
+          if [ -n "$COVERAGE_REPORT" ]; then
+            set -- "$@" -- --cov --cov-report="xml:$COVERAGE_REPORT" --cov-append
+          fi
+          uvx nox "$@"
 
       # upload the report as an artifact to GitHub so that it can later be uploaded to Codecov
-      - name: Upload 🐍 coverage report for ${{ inputs.runs-on }}
+      - if: ${{ inputs.enable-coverage }}
+        name: Upload 🐍 coverage report for ${{ inputs.runs-on }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-${{ inputs.runs-on }}
-          path: coverage-*
+          name: coverage-${{ inputs.runs-on }}${{ inputs.python-version && format('-{0}', inputs.python-version) || '' }}-${{ join(fromJSON(inputs.sessions), '-') }}
+          path: coverage-${{ inputs.runs-on }}${{ inputs.python-version && format('-{0}', inputs.python-version) || '' }}-${{ join(fromJSON(inputs.sessions), '-') }}.xml
+          if-no-files-found: error
           archive: false
-
-      - name: Show sccache stats
-        run: sccache --show-stats

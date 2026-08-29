@@ -10,6 +10,55 @@ releases may include breaking changes.
 
 ## [Unreleased]
 
+_If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
+
+### Added
+
+- ✨ Reintroduce `reusable-python-ci.yml` as an umbrella workflow that composes
+  the granular workflows into the whole Python CI pipeline, including a stable
+  `🚦 Check` job for branch protection and a `python-versions` input for
+  projects that deviate from the default interpreter window ([#445])
+- ✨ Add a `wheels-artifact` input to `reusable-python-tests.yml` that installs
+  the package from prebuilt wheels, pinned to the exact version found in the
+  wheelhouse ([#445])
+- ✨ Add `python-version`, `enable-coverage`, and `timeout-minutes` inputs to
+  `reusable-python-tests.yml` ([#445])
+
+### Changed
+
+- ♻️ Merge `reusable-cpp-tests-ubuntu.yml`, `reusable-cpp-tests-macos.yml`, and
+  `reusable-cpp-tests-windows.yml` into a single `reusable-cpp-tests.yml` that
+  derives the platform from `runs-on` and sets up the compiler in one shared
+  step ([#445])
+- 🐛 Build with the ClangCL toolset when `compiler: clang` is requested on
+  Windows; this was documented but never implemented ([#445])
+- 🚸 Run one Python version and one Nox session per test job; the `minimums`
+  session runs on Linux and Windows (x86) only, at the interpreter boundaries
+  ([#445])
+- 🚸 Reduce draft pull requests to a single Linux wheel build and test job
+  without coverage in `reusable-python-ci.yml` ([#445])
+- 🚸 Declare the full optional secret contract (`IQM_TOKEN`, `IQM_QC_ALIAS`, and
+  the three AWS secrets) on every reusable workflow that reads them, for callers
+  that cannot use `secrets: inherit` ([#445])
+- ⚡️ Cap the compiler caches and share them through run-id-keyed Actions cache
+  entries in `reusable-python-packaging-wheel-cibuildwheel.yml`,
+  `reusable-cpp-coverage.yml`, and `reusable-cpp-linter.yml` ([#445])
+- ⚡️ Save the pruned, uniquely-keyed uv caches on every run instead of only on
+  `main` ([#445])
+- 🐛 Make the coverage artifact name in `reusable-python-tests.yml` unique per
+  matrix entry ([#445])
+- 🚸 Drop the workflow-level concurrency group from
+  `reusable-change-detection.yml` so a pipeline can call it more than once
+  ([#445])
+- 🚸 Lower the default test job timeout from 60 to 30 minutes ([#445])
+
+### Removed
+
+- 🔥 Remove the compiler machinery (MSVC setup, the Ninja override, mold, and
+  sccache) and the "Free up space" steps from `reusable-python-tests.yml`
+  ([#445])
+- 🔥 Remove the `draft-sessions` input from `reusable-python-tests.yml` ([#445])
+
 ## [2.3.0] - 2026-08-24
 
 _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#230)._
@@ -522,6 +571,7 @@ _📚 Refer to the [GitHub Release Notes] for previous changelogs._
 
 <!-- PR links -->
 
+[#445]: https://github.com/munich-quantum-toolkit/workflows/pull/445
 [#442]: https://github.com/munich-quantum-toolkit/workflows/pull/442
 [#441]: https://github.com/munich-quantum-toolkit/workflows/pull/441
 [#434]: https://github.com/munich-quantum-toolkit/workflows/pull/434

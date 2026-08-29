@@ -39,6 +39,20 @@ on:
         default: false
         type: boolean
 
+    # All optional, so that cross-organization callers (which cannot use
+    # `secrets: inherit`) can pass them explicitly.
+    secrets:
+      IQM_TOKEN:
+        required: false
+      IQM_QC_ALIAS:
+        required: false
+      AWS_S3_BUCKET:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-python-linter
   cancel-in-progress: true
@@ -79,7 +93,8 @@ jobs:
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          prune-cache: true # setup-uv v10 no longer prunes by default
+          cache-suffix: lint
 
       - name: Check if stub files are up to date
         if: ${{ inputs.check-stubs }}

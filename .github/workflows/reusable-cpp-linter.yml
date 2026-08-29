@@ -55,6 +55,20 @@ on:
         default: "21.1.8"
         type: string
 
+    # All optional, so that cross-organization callers (which cannot use
+    # `secrets: inherit`) can pass them explicitly.
+    secrets:
+      IQM_TOKEN:
+        required: false
+      IQM_QC_ALIAS:
+        required: false
+      AWS_S3_BUCKET:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-cpp-linter
   cancel-in-progress: true
@@ -95,13 +109,25 @@ jobs:
         with:
           llvm-version: ${{ inputs.llvm-version }}
 
-      # set up ccache for faster builds
-      - name: Set up ccache
+      - name: Set up compiler cache
         if: ${{ inputs.build-project }}
-        uses: Chocobo1/setup-ccache-action@a4d08616f5b614053bce228ddf881592f69d61d4 # v1.5.9
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          prepend_symlinks_to_path: false
-          override_cache_key: c++-lint
+          path: ${{ runner.temp }}/ccache
+          key: ccache-cpp-lint-${{ github.run_id }}
+          restore-keys: ccache-cpp-lint-
+
+      - name: Use ccache as the compiler launcher
+        if: ${{ inputs.build-project }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache
+          {
+            echo "CCACHE_DIR=$RUNNER_TEMP/ccache"
+            echo "CCACHE_MAXSIZE=2G"
+            echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          } >> "$GITHUB_ENV"
 
       - name: Set up mold as linker
         if: ${{ inputs.build-project }}

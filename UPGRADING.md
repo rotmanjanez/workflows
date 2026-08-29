@@ -6,6 +6,146 @@ of changes, including minor and patch releases, please refer to the
 
 ## [Unreleased]
 
+### One `reusable-cpp-tests.yml` replaces the three per-platform workflows
+
+`reusable-cpp-tests-ubuntu.yml`, `reusable-cpp-tests-macos.yml`, and
+`reusable-cpp-tests-windows.yml` are gone. They shared everything but the
+compiler setup, so they are now a single `reusable-cpp-tests.yml` that derives
+the platform from `runs-on`:
+
+```yaml
+cpp-tests:
+  name: 🇨 Test
+  strategy:
+    fail-fast: false
+    matrix:
+      include:
+        - runs-on: ubuntu-24.04
+          compiler: gcc
+        - runs-on: macos-latest
+        - runs-on: windows-latest
+  uses: munich-quantum-toolkit/workflows/.github/workflows/reusable-cpp-tests.yml@v3
+  with:
+    runs-on: ${{ matrix.runs-on }}
+    compiler: ${{ matrix.compiler }}
+    preset-name: ${{ matrix.preset }}
+```
+
+Migrating a caller:
+
+- Point every `reusable-cpp-tests-<platform>.yml` job at
+  `reusable-cpp-tests.yml`. Where a matrix previously fanned out across three
+  separate jobs, one job with a `runs-on` matrix now covers all platforms.
+- `runs-on` is required and no longer has a default, because a single workflow
+  cannot carry a different default per platform. Pass it explicitly.
+- `compiler` now defaults to `''`, meaning the platform default (`gcc` on Linux,
+  Apple Clang on macOS, `msvc` on Windows). The previous per-platform defaults
+  resolve to exactly these, so omitting `compiler` is equivalent to before. An
+  invalid combination now fails the job instead of being ignored: `gcc` is
+  Linux-only, `gcc-XX` macOS-only, `clang-XX` Linux and macOS only.
+- `mlir-debug` is accepted on every platform, not just Windows.
+- Update branch protection: the job names now come from your own matrix rather
+  than from three differently named workflows.
+
+On Windows, `compiler: clang` now actually builds with the ClangCL toolset (via
+`CMAKE_GENERATOR_TOOLSET`). The Windows workflow documented this behavior but
+never implemented it, so `compiler: clang` silently built with MSVC. Windows
+jobs that passed `clang` will change compilers as a result.
+
+### `reusable-python-ci.yml` owns the Python CI pipeline
+
+Python CI is now a single job in a repository's `ci.yml`:
+
+```yaml
+python:
+  name: 🐍
+  uses: munich-quantum-toolkit/workflows/.github/workflows/reusable-python-ci.yml@v3
+  with:
+    compiled: true # only for projects with a compiled extension
+  secrets: inherit
+  permissions:
+    contents: read
+    id-token: write
+```
+
+It composes the granular workflows into the full pipeline (change detection,
+lint before tests, packaging, wheels, test matrix, coverage, all-green job).
+
+The `python-versions` input (default `'["3.11", "3.12", "3.13", "3.14"]'`,
+oldest first) sets the interpreter window. The platforms and the shape of the
+matrix are not configurable: Linux (x86) runs every listed version, the other
+four platforms run the oldest and the newest, and `minimums` runs on Linux and
+Windows (x86) at those two boundaries. Draft pull requests run one Linux wheel
+build and one test job on the newest interpreter, and no coverage.
+
+Migrating a caller:
+
+- Replace the Python jobs in `ci.yml` (`python-tests`, `python-linter`,
+  `python-coverage`, CI sdist/wheel builds) and their change-detection wiring
+  with the job above.
+- Require `🐍 / 🚦 Check` in branch protection.
+- Drop `PYTHON_ALL_VERSIONS` from `noxfile.py`; CI passes the version via `-p`.
+- Extra repository-specific sessions stay in the repository: add a separate job
+  calling `reusable-python-tests.yml` directly.
+
+### `reusable-python-tests.yml` runs one Python version per job
+
+The new `python-version` input runs exactly that version via Nox's `-p`, so
+callers matrix the version and get one job per (platform, version) pair instead
+of one job per platform looping over `PYTHON_ALL_VERSIONS`.
+
+- `sessions` entries must not carry a version suffix: `"tests"`, not
+  `"tests-3.14"`, and every listed session must exist for every matrixed
+  version. Pair a version-pinned session with its version via `matrix.include`.
+- `draft-sessions` is gone; passing it now fails the run instead of silently
+  promoting drafts to the full matrix. Shape the matrix instead to keep drafts
+  cheap (`reusable-python-ci.yml` does this for you).
+- New: `enable-coverage` (default `true`) and `timeout-minutes` (default `30`,
+  down from the previous hard-coded `60`). Coverage artifacts are named per
+  (platform, version, sessions) matrix entry.
+
+### `reusable-python-tests.yml` tests prebuilt wheels instead of compiling
+
+All compiler machinery (MSVC developer shell, the Ninja override, mold, sccache)
+and the "Free up space" steps are gone. Compiled projects instead pass the new
+`wheels-artifact` input, naming the artifact
+`reusable-python-packaging-wheel-cibuildwheel.yml` built for the same platform
+(including the `dev-` prefix on pull requests). The workflow downloads it and
+sets uv's `UV_FIND_LINKS`, `UV_NO_BUILD_PACKAGE`, and `UV_CONSTRAINT`, so
+sessions install the prebuilt wheel — pinned to the exact version found in the
+wheelhouse, so an empty or stale artifact fails the job instead of falling
+through to PyPI — with an unmodified noxfile. When empty, sessions build from
+source, as intended for pure-Python projects.
+
+Sessions get a regular, non-editable install, so coverage is measured inside
+`site-packages` and Codecov would report zero diff coverage on pull requests.
+Map the paths back in `pyproject.toml`:
+
+```toml
+[tool.coverage.paths]
+source = ["src/<package>", "*/site-packages/<package>"]
+```
+
+Sessions that relied on an editable install (importing test helpers from the
+source tree, patching installed files) need the same treatment.
+
+### Compiler and uv caching is always on
+
+`reusable-python-packaging-wheel-cibuildwheel.yml` (on macOS and Windows —
+manylinux containers cannot reach a host sccache), `reusable-cpp-coverage.yml`,
+and `reusable-cpp-linter.yml` share compiler results through capped,
+run-id-keyed Actions cache entries that every run restores and saves — pull
+requests included, since Actions caches are branch-scoped and a pull request
+never reads a sibling's cache. The uv caches follow the same policy: pruned,
+keyed uniquely per workflow and matrix entry, and saved on every run instead of
+only on `main`.
+
+This supersedes the note in [2.2.1](#221) that "compiler results are not stored
+between jobs or workflow runs" and replaces the previous uncapped caches that
+permanently overflowed the 10 GB per-repository budget. Callers need no changes,
+but repositories may want to delete the old `c++-coverage_*` and `c++-lint_*`
+entries once (Actions → Caches) to free the budget immediately.
+
 ## [2.3.0]
 
 The Python test workflow now accepts `sessions` and `draft-sessions` as

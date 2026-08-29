@@ -42,10 +42,6 @@ on:
         description: Whether to run the continuous deployment job
         value: ${{ jobs.change-detection.outputs.run-cd || false }}
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-change-detection
-  cancel-in-progress: true
-
 permissions:
   contents: read
 

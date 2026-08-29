@@ -1,0 +1,244 @@
+# Copyright (c) 2023 - 2026 Chair for Design Automation, TUM
+# Copyright (c) 2025 - 2026 Munich Quantum Software Company GmbH
+# All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License
+
+name: 🇨 • Tests
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >
+          The runner image to use. Required, since the platform is derived from it.
+          This can be any valid Ubuntu, macOS, or Windows runner image, such as
+          'ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-15', 'macos-26-intel', or 'windows-2025'.
+        required: true
+        type: string
+      run-on-draft:
+        description: "Whether to run the tests for draft pull requests"
+        default: true
+        type: boolean
+      compiler:
+        description: >
+          The compiler to use. Defaults to the platform's default compiler,
+          that is, 'gcc' on Linux, 'clang' (Apple Clang) on macOS, and 'msvc' on Windows.
+          Linux accepts 'gcc', 'clang', and 'clang-XX' (installed from apt.llvm.org).
+          macOS accepts 'clang', 'clang-XX', and 'gcc-XX' (both installed from Homebrew).
+          Windows accepts 'msvc' and 'clang' (which builds with the ClangCL toolset).
+          XX is the major version number, for example 'clang-20' or 'gcc-14'.
+        default: ""
+        type: string
+      setup-z3:
+        description: "Whether to set up Z3"
+        default: false
+        type: boolean
+      z3-version:
+        description: "The version of Z3 to set up"
+        default: "4.13.4"
+        type: string
+      setup-mlir:
+        description: "Whether to set up MLIR"
+        default: false
+        type: boolean
+      llvm-version:
+        description: "The LLVM version to set up (formatted as 'major.minor.patch') or commit hash (minimum 7 characters, e.g., 'a832a52')"
+        default: "21.1.8"
+        type: string
+      mlir-debug:
+        description: "Whether to use a debug build of MLIR"
+        default: false
+        type: boolean
+      preset-name:
+        description: "The CMake preset to use for configuration and build"
+        required: true
+        type: string
+
+    # All optional, so that cross-organization callers (which cannot use
+    # `secrets: inherit`) can pass them explicitly.
+    secrets:
+      IQM_TOKEN:
+        required: false
+      IQM_QC_ALIAS:
+        required: false
+      AWS_S3_BUCKET:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-cpp-tests-${{ inputs.runs-on }}-${{ inputs.compiler }}-${{ inputs.preset-name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  cpp-tests:
+    if: ${{ !github.event.pull_request.draft || inputs.run-on-draft }}
+    name: ${{ startsWith(inputs.runs-on, 'ubuntu') && '🐧' || startsWith(inputs.runs-on, 'macos') && '🍎' || '🏁' }} ${{ inputs.runs-on }} ${{ inputs.compiler }} ${{ inputs.preset-name }}
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+      CTEST_PARALLEL_LEVEL: 4
+      FORCE_COLOR: 3
+      IQM_TOKEN: ${{ secrets.IQM_TOKEN }}
+      IQM_QC_ALIAS: ${{ secrets.IQM_QC_ALIAS }}
+      AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Z3
+        if: ${{ inputs.setup-z3 }}
+        uses: cda-tum/setup-z3@0401375ea1e34d77ef35bbeb634f6203f3bcde60 # v1.7.3
+        with:
+          version: ${{ inputs.z3-version }}
+
+      - name: Set up MLIR
+        if: ${{ inputs.setup-mlir }}
+        uses: munich-quantum-software/setup-mlir@3f32263ce571a8b745068980f30f188b6e800763 # v1.4.2
+        with:
+          llvm-version: ${{ inputs.llvm-version }}
+          debug: ${{ inputs.mlir-debug }}
+
+      - name: Set up mold as linker
+        if: ${{ runner.os == 'Linux' }}
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: 3.13
+          activate-environment: true
+          enable-cache: false
+
+      # Windows builds with the Visual Studio generator, which ships its own build tool.
+      - name: Install Ninja
+        if: ${{ runner.os != 'Windows' }}
+        run: uv tool install ninja
+
+      - name: Install lit
+        if: ${{ inputs.setup-mlir }}
+        run: |
+          uv pip install lit
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            echo "LIT_BIN=$GITHUB_WORKSPACE/.venv/Scripts/lit.exe" >> "$GITHUB_ENV"
+          else
+            echo "LIT_BIN=$(which lit)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Set up compiler
+        env:
+          COMPILER: ${{ inputs.compiler }}
+          TEMP_DIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+
+          # Strip anything that cannot appear in a compiler name before matching,
+          # so the version can be interpolated into commands further down safely.
+          compiler=$(echo "$COMPILER" | sed 's/[^a-zA-Z0-9.-]//g' | tr -d '\n')
+
+          # An empty input means "whatever the platform provides by default".
+          if [[ -z "$compiler" ]]; then
+            case "$RUNNER_OS" in
+              Linux) compiler=gcc ;;
+              macOS) compiler=clang ;;
+              Windows) compiler=msvc ;;
+            esac
+          fi
+
+          fail() {
+            echo "Invalid compiler '$compiler' for $RUNNER_OS." >&2
+            exit 1
+          }
+
+          case "$RUNNER_OS" in
+            Linux)
+              case "$compiler" in
+                gcc)
+                  ;; # the default compiler; nothing to set up
+                clang)
+                  echo "CC=clang" >> "$GITHUB_ENV"
+                  echo "CXX=clang++" >> "$GITHUB_ENV"
+                  ;;
+                clang-*)
+                  version="${compiler#clang-}"
+                  [[ "$version" =~ ^[0-9]+(\.[0-9]+)?$ ]] || fail
+                  sudo apt-get update
+                  wget https://apt.llvm.org/llvm.sh -O "$TEMP_DIR/llvm_install.sh"
+                  chmod +x "$TEMP_DIR/llvm_install.sh"
+                  sudo "$TEMP_DIR/llvm_install.sh" "$version"
+                  sudo apt-get install -y "clang-$version" "clang-tools-$version"
+                  echo "CC=clang-$version" >> "$GITHUB_ENV"
+                  echo "CXX=clang++-$version" >> "$GITHUB_ENV"
+                  ;;
+                *) fail ;;
+              esac
+              ;;
+            macOS)
+              case "$compiler" in
+                clang)
+                  ;; # Apple Clang; nothing to set up
+                clang-*)
+                  version="${compiler#clang-}"
+                  [[ "$version" =~ ^[0-9]+$ ]] || fail
+                  brew install "llvm@$version"
+                  echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+                  llvm_prefix=$(brew --prefix "llvm@$version")
+                  echo "CC=$llvm_prefix/bin/clang" >> "$GITHUB_ENV"
+                  echo "CXX=$llvm_prefix/bin/clang++" >> "$GITHUB_ENV"
+                  # Link against Homebrew Clang's libc++ and unwind library to resolve symbol conflicts
+                  echo "LDFLAGS=${LDFLAGS:-} -L$llvm_prefix/lib/c++ -L$llvm_prefix/lib/unwind -lunwind" >> "$GITHUB_ENV"
+                  ;;
+                gcc-*)
+                  version="${compiler#gcc-}"
+                  [[ "$version" =~ ^[0-9]+$ ]] || fail
+                  brew install "gcc@$version"
+                  echo "CC=gcc-$version" >> "$GITHUB_ENV"
+                  echo "CXX=g++-$version" >> "$GITHUB_ENV"
+                  ;;
+                *) fail ;;
+              esac
+              ;;
+            Windows)
+              case "$compiler" in
+                msvc)
+                  ;; # the default toolset; nothing to set up
+                clang)
+                  # Equivalent to passing '-T ClangCL' to the Visual Studio generator.
+                  echo "CMAKE_GENERATOR_TOOLSET=ClangCL" >> "$GITHUB_ENV"
+                  ;;
+                *) fail ;;
+              esac
+              ;;
+          esac
+
+      - name: Configure CMake
+        env:
+          PRESET_NAME: ${{ inputs.preset-name }}
+        run: cmake --preset "$PRESET_NAME"
+
+      - name: Build
+        timeout-minutes: 60
+        env:
+          PRESET_NAME: ${{ inputs.preset-name }}
+        run: cmake --build --preset "$PRESET_NAME"
+
+      - name: Test
+        env:
+          PRESET_NAME: ${{ inputs.preset-name }}
+        run: ctest --preset "$PRESET_NAME"

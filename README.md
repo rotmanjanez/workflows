@@ -42,11 +42,14 @@ workflow, use `secrets: inherit` and define the corresponding repository or
 environment secrets with the same names.
 
 Secret inheritance is limited to callers in the same organization or enterprise.
-Cross-organization callers of `reusable-python-packaging-wheel-cibuildwheel.yml`
-can instead pass the AWS secrets explicitly:
+Cross-organization callers cannot use `secrets: inherit`. Every reusable
+workflow declares all of these secrets as optional inputs, so such callers can
+pass whichever ones they need explicitly:
 
 ```yaml
 secrets:
+  IQM_TOKEN: ${{ secrets.IQM_TOKEN }}
+  IQM_QC_ALIAS: ${{ secrets.IQM_QC_ALIAS }}
   AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

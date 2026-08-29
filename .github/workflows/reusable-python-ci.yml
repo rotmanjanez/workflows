@@ -1,0 +1,260 @@
+# Copyright (c) 2023 - 2026 Chair for Design Automation, TUM
+# Copyright (c) 2025 - 2026 Munich Quantum Software Company GmbH
+# All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License
+
+name: 🐍 • CI
+
+on:
+  workflow_call:
+    inputs:
+      compiled:
+        description: "Whether the project has a compiled extension; if so, tests install the built wheels"
+        default: false
+        type: boolean
+      python-versions:
+        description: "The Python versions to test, formatted as a JSON array, oldest first"
+        default: '["3.11", "3.12", "3.13", "3.14"]'
+        type: string
+      enable-coverage:
+        description: "Whether to measure coverage and upload it to Codecov"
+        default: true
+        type: boolean
+      enable-ty:
+        description: "Whether to enable Astral's ty for type checking"
+        default: false
+        type: boolean
+      enable-mypy:
+        description: "Whether to enable mypy for type checking"
+        default: true
+        type: boolean
+      check-stubs:
+        description: "Whether to check if the stub files are up to date. Requires a nox session called `stubs` to exist."
+        default: false
+        type: boolean
+      fail-fast:
+        description: "Whether to cancel the remaining test jobs when one fails"
+        default: false
+        type: boolean
+      timeout-minutes:
+        description: "The maximum time in minutes to allow a single test job to run"
+        default: 30
+        type: number
+      additional-python-files:
+        description: "Additional file patterns (one glob per line) whose changes require the linter and test jobs to run"
+        default: ""
+        type: string
+      additional-packaging-files:
+        description: "Additional file patterns (one glob per line) whose changes require the packaging jobs to run"
+        default: ""
+        type: string
+      setup-z3:
+        description: "Whether to set up Z3"
+        default: false
+        type: boolean
+      z3-version:
+        description: "The version of Z3 to set up"
+        default: "4.13.4"
+        type: string
+      setup-mlir:
+        description: "Whether to set up MLIR"
+        default: false
+        type: boolean
+      llvm-version:
+        description: "The LLVM version to set up (formatted as 'major.minor.patch') or commit hash (minimum 7 characters, e.g., 'a832a52')"
+        default: "21.1.8"
+        type: string
+
+    # All optional, so that cross-organization callers (which cannot use
+    # `secrets: inherit`) can pass them explicitly.
+    secrets:
+      IQM_TOKEN:
+        required: false
+      IQM_QC_ALIAS:
+        required: false
+      AWS_S3_BUCKET:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: 🚦 Gate
+    uses: ./.github/workflows/reusable-change-detection.yml
+    with:
+      additional-python-files: ${{ inputs.additional-python-files }}
+      # `run-cd` gates the packaging jobs, so packaging metadata counts as CD-relevant
+      additional-cd-files: |
+        pyproject.toml
+        uv.lock
+        ${{ inputs.additional-packaging-files }}
+
+  setup:
+    name: 🧮 Matrix
+    # not `ubuntu-slim`: the minimal image does not ship a Python interpreter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      build-matrix: ${{ steps.matrix.outputs.build }}
+      test-matrix: ${{ steps.matrix.outputs.test }}
+    steps:
+      - name: Compute the build and test matrices
+        id: matrix
+        shell: python
+        env:
+          PYTHON_VERSIONS: ${{ inputs.python-versions }}
+          DRAFT: ${{ github.event.pull_request.draft || false }}
+          ENABLE_COVERAGE: ${{ inputs.enable-coverage }}
+        run: |
+          import json, os
+
+          RUNNERS = {
+              "linux": "ubuntu-24.04",
+              "linux-arm": "ubuntu-24.04-arm",
+              "macos": "macos-26",
+              "windows": "windows-2025",
+              "windows-arm": "windows-11-arm",
+          }
+
+          versions = json.loads(os.environ["PYTHON_VERSIONS"])
+          oldest, newest = versions[0], versions[-1]
+          bounds = [oldest] if oldest == newest else [oldest, newest]
+
+          draft = os.environ["DRAFT"] == "true"
+          coverage = os.environ["ENABLE_COVERAGE"] == "true"
+
+          def entry(platform, version, session, cover=False):
+              e = {"os": platform, "runs-on": RUNNERS[platform],
+                   "python-version": version, "session": session}
+              return e | {"coverage": True} if cover else e
+
+          if draft:
+              build = [{"os": "linux", "runs-on": RUNNERS["linux"]}]
+              test = [entry("linux", newest, "tests")]
+          else:
+              build = [{"os": p, "runs-on": r} for p, r in RUNNERS.items()]
+              # only linux (x86) runs the full interpreter range
+              test = [entry(p, v, "tests", cover=coverage and p == "linux" and v == newest)
+                      for p in RUNNERS
+                      for v in (versions if p == "linux" else bounds)]
+              # a wrong lower bound already shows up on linux and windows (x86)
+              test += [entry(p, v, "minimums") for p in ("linux", "windows") for v in bounds]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"build={json.dumps({'include': build})}\n")
+              f.write(f"test={json.dumps({'include': test})}\n")
+
+  lint:
+    name: Lint
+    needs: gate
+    if: ${{ fromJSON(needs.gate.outputs.run-python-linter) }}
+    uses: ./.github/workflows/reusable-python-linter.yml
+    with:
+      enable-ty: ${{ inputs.enable-ty }}
+      enable-mypy: ${{ inputs.enable-mypy }}
+      check-stubs: ${{ inputs.check-stubs }}
+      setup-z3: ${{ inputs.setup-z3 }}
+      z3-version: ${{ inputs.z3-version }}
+      setup-mlir: ${{ inputs.setup-mlir }}
+      llvm-version: ${{ inputs.llvm-version }}
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
+  package:
+    name: 📦 sdist
+    needs: gate
+    if: ${{ github.event_name != 'pull_request' || fromJSON(needs.gate.outputs.run-cd) }}
+    uses: ./.github/workflows/reusable-python-packaging-sdist.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
+  wheel:
+    name: 📦 wheel
+    needs: gate
+    if: ${{ !inputs.compiled && (github.event_name != 'pull_request' || fromJSON(needs.gate.outputs.run-cd)) }}
+    uses: ./.github/workflows/reusable-python-packaging-wheel-build.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
+  # not gated on the linter: the wheel builds are on the critical path of the test matrix
+  build:
+    name: Build (${{ matrix.os }})
+    needs: [gate, setup]
+    if: >-
+      ${{ inputs.compiled
+      && (fromJSON(needs.gate.outputs.run-python-tests)
+      || github.event_name != 'pull_request'
+      || fromJSON(needs.gate.outputs.run-cd)) }}
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix: ${{ fromJSON(needs.setup.outputs.build-matrix) }}
+    uses: ./.github/workflows/reusable-python-packaging-wheel-cibuildwheel.yml
+    with:
+      runs-on: ${{ matrix.runs-on }}
+      setup-z3: ${{ inputs.setup-z3 }}
+      z3-version: ${{ inputs.z3-version }}
+      setup-mlir: ${{ inputs.setup-mlir }}
+      llvm-version: ${{ inputs.llvm-version }}
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.python-version }}, ${{ matrix.session }})
+    needs: [gate, setup, lint, build]
+    # `lint` and `build` may be legitimately skipped; only their failure must block
+    if: >-
+      ${{ !cancelled()
+      && needs.gate.result == 'success'
+      && needs.setup.result == 'success'
+      && fromJSON(needs.gate.outputs.run-python-tests)
+      && needs.lint.result != 'failure'
+      && needs.build.result != 'failure' }}
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix: ${{ fromJSON(needs.setup.outputs.test-matrix) }}
+    uses: ./.github/workflows/reusable-python-tests.yml
+    with:
+      runs-on: ${{ matrix.runs-on }}
+      python-version: ${{ matrix.python-version }}
+      sessions: ${{ format('["{0}"]', matrix.session) }}
+      enable-coverage: ${{ inputs.enable-coverage && matrix.coverage || false }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
+      wheels-artifact: ${{ inputs.compiled && format('{0}cibw-wheels-{1}', github.event_name == 'pull_request' && 'dev-' || '', matrix.runs-on) || '' }}
+      setup-z3: ${{ inputs.setup-z3 }}
+      z3-version: ${{ inputs.z3-version }}
+      setup-mlir: ${{ inputs.setup-mlir }}
+      llvm-version: ${{ inputs.llvm-version }}
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
+  coverage:
+    name: Coverage
+    needs: test
+    # drafts run no coverage entry, so there is no report to upload
+    if: >-
+      ${{ !cancelled()
+      && needs.test.result == 'success'
+      && inputs.enable-coverage
+      && !github.event.pull_request.draft }}
+    uses: ./.github/workflows/reusable-python-coverage.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    permissions:
+      contents: read # Required for the `actions/checkout` action
+      id-token: write # Required for the `codecov/codecov-action` action
+
+  # the one job branch protection needs to require
+  check:
+    name: 🚦 Check
+    needs: [gate, setup, lint, package, wheel, build, test, coverage]
+    if: always()
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    steps:
+      - name: Fail if any needed job failed or was cancelled
+        if: >-
+          ${{ contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled') }}
+        run: exit 1
