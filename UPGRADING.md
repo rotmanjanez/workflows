@@ -36,11 +36,27 @@ Migrating a caller:
   `run-on-draft` inputs, and the `cpp-coverage` job with the job above.
 - `mlir-debug` is gone: only the Windows debug build needs a debug MLIR, and the
   workflow derives that itself.
-- Update branch protection: job names now come from the workflow, not your matrix.
+- Update branch protection: job names now come from the workflow, not your
+  matrix.
 
-On Windows, `compiler: clang` now actually builds with the ClangCL toolset (via
-`CMAKE_GENERATOR_TOOLSET`). The Windows workflow documented this behavior but
-never implemented it, so `compiler: clang` silently built with MSVC.
+Windows C++ test jobs now initialize native MSVC and build with Ninja instead of
+the Visual Studio generator, so the job-local sccache applies there as well. No
+preset change is required as long as your `base-windows` preset leaves the
+generator unset, as the reference presets below do -- `CMAKE_GENERATOR` fills it
+in. A preset that names `"generator": "Visual Studio 17 2022"` explicitly still
+wins, and simply keeps building uncached. The `-windows` presets are otherwise
+redundant now, but they remain supported and the workflow keeps selecting them.
+
+Windows Debug builds are configured with
+`-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded`, because sccache cannot cache a
+compilation that writes a separate PDB. This requires `CMP0141` to be `NEW`
+(that is, `cmake_minimum_required(VERSION 3.25)` or later); on an older policy
+the setting is ignored and Windows Debug builds simply stay uncached.
+
+On Windows, `compiler: clang` now actually builds with clang-cl. The Windows
+workflow documented this behavior but never implemented it, so `compiler: clang`
+silently built with MSVC. It was briefly implemented via
+`CMAKE_GENERATOR_TOOLSET=ClangCL`, which Ninja does not accept.
 
 ### `reusable-python-tests.yml` owns the test matrix
 
@@ -66,8 +82,8 @@ newest, and `minimums` runs on Linux and Windows (x86) at those two boundaries.
 Drafts run one job on the newest interpreter. Coverage runs here too.
 
 `runs-on`, `python-version`, `sessions`, and `wheels-artifact` are gone. So is
-`draft-sessions`, which now fails the run instead of silently promoting drafts to
-the full matrix. Repository-specific sessions belong in a job of their own.
+`draft-sessions`, which now fails the run instead of silently promoting drafts
+to the full matrix. Repository-specific sessions belong in a job of their own.
 
 Compiled projects pass `compiled: true` instead of `wheels-artifact`; the
 workflow derives the artifact name and needs `reusable-python-build.yml` to have

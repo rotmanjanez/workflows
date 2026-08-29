@@ -43,8 +43,11 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   entries in `reusable-python-packaging-wheel-cibuildwheel.yml`,
   `reusable-cpp-coverage.yml`, and `reusable-cpp-linter.yml` ([#445])
 - ⚡️ Cache the C++ test builds with sccache in `reusable-cpp-tests.yml`, which
-  was the only compiling workflow without a compiler cache. Windows is excluded:
-  the Visual Studio generator ignores `CMAKE_<LANG>_COMPILER_LAUNCHER` ([#445])
+  was the only compiling workflow without a compiler cache ([#445])
+- ⚡️ Build Windows C++ tests with native MSVC and Ninja in
+  `reusable-cpp-tests.yml`, so sccache covers Windows too. Debug builds embed
+  their debug info (`/Z7`), which sccache can cache, unlike a separate PDB
+  ([#445])
 - ⚡️ Save the pruned, uniquely-keyed uv caches on every run instead of only on
   `main` ([#445])
 - 🐛 Make the coverage artifact name in `reusable-python-tests.yml` unique per

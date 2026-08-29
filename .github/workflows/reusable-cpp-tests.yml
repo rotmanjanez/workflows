@@ -24,7 +24,7 @@ on:
           that is, 'gcc' on Linux, 'clang' (Apple Clang) on macOS, and 'msvc' on Windows.
           Linux accepts 'gcc', 'clang', and 'clang-XX' (installed from apt.llvm.org).
           macOS accepts 'clang', 'clang-XX', and 'gcc-XX' (both installed from Homebrew).
-          Windows accepts 'msvc' and 'clang' (which builds with the ClangCL toolset).
+          Windows accepts 'msvc' and 'clang' (which builds with clang-cl).
           XX is the major version number, for example 'clang-20' or 'gcc-14'.
         default: ""
         type: string
@@ -134,6 +134,89 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up MSVC
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $vsArch = switch ($env:RUNNER_ARCH) {
+            'X64' { 'amd64' }
+            'ARM64' { 'arm64' }
+            default { throw "Unsupported Windows runner architecture: $env:RUNNER_ARCH" }
+          }
+          $component = switch ($env:RUNNER_ARCH) {
+            'X64' { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
+            'ARM64' { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' }
+          }
+
+          $candidates = @(
+            if (${env:ProgramFiles(x86)}) {
+              Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            }
+            if ($env:ProgramFiles) {
+              Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe'
+            }
+            Get-Command vswhere.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          )
+          $vswhere = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $vswhere) {
+            throw 'vswhere.exe not found'
+          }
+
+          $vsPath = (& $vswhere -latest -products '*' -prerelease -requires $component -property installationPath | Select-Object -First 1)
+          if (-not $vsPath) {
+            throw "Visual Studio with $component not found"
+          }
+          $devShell = Join-Path $vsPath 'Common7\Tools\Launch-VsDevShell.ps1'
+          if (-not (Test-Path $devShell)) {
+            throw "Developer shell not found: $devShell"
+          }
+
+          $before = @{}
+          Get-ChildItem Env: | ForEach-Object { $before[$_.Name] = $_.Value }
+          $devShellArguments = @{
+            Arch = $vsArch
+            SkipAutomaticLocation = $true
+          }
+          if ($env:RUNNER_ARCH -eq 'X64') {
+            $devShellArguments.HostArch = 'amd64'
+          }
+          & $devShell @devShellArguments
+
+          $compiler = (Get-Command cl.exe -ErrorAction Stop).Source
+          $expected = if ($env:RUNNER_ARCH -eq 'ARM64') { '\Hostarm64\arm64\' } else { '\Hostx64\x64\' }
+          if ($compiler -notmatch [regex]::Escape($expected)) {
+            throw "Unexpected MSVC compiler for $($env:RUNNER_ARCH): $compiler"
+          }
+          Write-Host "Using $compiler"
+
+          Get-ChildItem Env: | ForEach-Object {
+            if (
+              (!$before.ContainsKey($_.Name) -or $before[$_.Name] -cne $_.Value) -and
+              $_.Name -notmatch '^(GITHUB_|RUNNER_)' -and
+              $_.Name -ne 'NODE_OPTIONS'
+            ) {
+              $delimiter = "ghadelimiter_$([guid]::NewGuid().ToString('N'))"
+              Add-Content -Path $env:GITHUB_ENV -Value "$($_.Name)<<$delimiter" -Encoding utf8
+              Add-Content -Path $env:GITHUB_ENV -Value $_.Value -Encoding utf8
+              Add-Content -Path $env:GITHUB_ENV -Value $delimiter -Encoding utf8
+            }
+          }
+
+      # base-windows leaves the generator unset, so this picks Ninja without any
+      # preset change. Ninja is what lets sccache act as a compiler launcher --
+      # the Visual Studio generator ignores CMAKE_<LANG>_COMPILER_LAUNCHER.
+      - name: Build Windows with Ninja
+        if: ${{ runner.os == 'Windows' }}
+        run: |
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+          # sccache cannot cache compilations that write a separate PDB, which is
+          # what CMake asks for by default in Debug. Embedding the debug info in
+          # the objects (/Z7) keeps every translation unit cacheable. Needs
+          # CMP0141 to be NEW, so it is ignored by projects on an older policy.
+          echo "CMAKE_CONFIGURE_ARGS=-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded" >> "$GITHUB_ENV"
+
       - name: Set up Z3
         if: ${{ inputs.setup-z3 }}
         uses: cda-tum/setup-z3@0401375ea1e34d77ef35bbeb634f6203f3bcde60 # v1.7.3
@@ -160,10 +243,7 @@ jobs:
           activate-environment: true
           enable-cache: false
 
-      # sccache is skipped on Windows: the Visual Studio generator ignores
-      # CMAKE_<LANG>_COMPILER_LAUNCHER, so there is nothing to hook it into.
       - name: Set up compiler cache
-        if: ${{ runner.os != 'Windows' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache
@@ -173,7 +253,6 @@ jobs:
           restore-keys: sccache-cpp-tests-${{ matrix.runs-on }}-${{ inputs.compiler }}-${{ matrix.preset }}-
 
       - name: Use sccache as the compiler launcher
-        if: ${{ runner.os != 'Windows' }}
         run: |
           uv tool install sccache
           {
@@ -183,9 +262,7 @@ jobs:
             echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache"
           } >> "$GITHUB_ENV"
 
-      # Windows builds with the Visual Studio generator, which ships its own build tool.
       - name: Install Ninja
-        if: ${{ runner.os != 'Windows' }}
         run: uv tool install ninja
 
       - name: Install lit
@@ -276,8 +353,11 @@ jobs:
                 msvc)
                   ;; # the default toolset; nothing to set up
                 clang)
-                  # Equivalent to passing '-T ClangCL' to the Visual Studio generator.
-                  echo "CMAKE_GENERATOR_TOOLSET=ClangCL" >> "$GITHUB_ENV"
+                  # Ninja takes no toolset, so name clang-cl as the compiler
+                  # instead. It is the MSVC-compatible driver, so the MSVC
+                  # environment set up above still applies.
+                  echo "CC=clang-cl" >> "$GITHUB_ENV"
+                  echo "CXX=clang-cl" >> "$GITHUB_ENV"
                   ;;
                 *) fail ;;
               esac
@@ -287,7 +367,11 @@ jobs:
       - name: Configure CMake
         env:
           PRESET_NAME: ${{ matrix.preset }}
-        run: cmake --preset "$PRESET_NAME"
+        run: |
+          set -eo pipefail
+          # unset off Windows, where there is nothing extra to pass
+          read -r -a extra_args <<< "${CMAKE_CONFIGURE_ARGS:-}"
+          cmake --preset "$PRESET_NAME" "${extra_args[@]}"
 
       - name: Build
         timeout-minutes: 60
@@ -304,7 +388,7 @@ jobs:
       # saved. A failure here means the server is already gone and there is
       # nothing left to flush -- never that the job failed.
       - name: Show sccache stats and stop the server
-        if: ${{ always() && runner.os != 'Windows' }}
+        if: ${{ always() }}
         continue-on-error: true
         run: |
           sccache --show-stats || true
