@@ -89,9 +89,8 @@ jobs:
           cache-suffix: cibw
           enable-cache: ${{ !startsWith(inputs.runs-on, 'ubuntu') }}
 
-      # set up sccache for faster builds (non-Ubuntu only: manylinux containers cannot reach a host sccache)
+      # set up sccache for faster builds
       - name: Set up compiler cache
-        if: ${{ !startsWith(inputs.runs-on, 'ubuntu') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache
@@ -187,6 +186,25 @@ jobs:
             echo "SCCACHE_CACHE_SIZE=1G"
           } >> "$GITHUB_ENV"
 
+      # A manylinux build runs inside a container, so an sccache installed there writes to a
+      # directory that dies with the container: projects that install sccache in `before-all`
+      # see it enabled by CMake and report a 0% hit rate on every single run. Bind-mounting a
+      # host directory in gives the cache somewhere to survive, and the step above caches it.
+      # `environment-pass` is used rather than `environment` because the latter would replace
+      # the project's own `[tool.cibuildwheel.linux] environment` table -- which is typically
+      # where MLIR_DIR and the like are set.
+      - name: Set up sccache in the manylinux container
+        if: ${{ startsWith(inputs.runs-on, 'ubuntu') }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/sccache"
+          {
+            echo "CIBW_CONTAINER_ENGINE=docker; create_args: --volume=$RUNNER_TEMP/sccache:/host/sccache"
+            echo "CIBW_ENVIRONMENT_PASS_LINUX=SCCACHE_DIR SCCACHE_CACHE_SIZE"
+            echo "SCCACHE_DIR=/host/sccache"
+            echo "SCCACHE_CACHE_SIZE=1G"
+          } >> "$GITHUB_ENV"
+
       # run cibuildwheel to build wheels for the specified Python version
       - uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
 
@@ -200,6 +218,14 @@ jobs:
         run: |
           sccache --show-stats || true
           sccache --stop-server || true
+      # the container is gone by now, so the cache is only readable through the host mount
+      - name: Make the container cache readable by the cache action
+        if: ${{ always() && startsWith(inputs.runs-on, 'ubuntu') }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/sccache"
+          du -sh "$RUNNER_TEMP/sccache"
       - name: Verify clean directory
         run: git diff --exit-code
         shell: bash

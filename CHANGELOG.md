@@ -75,6 +75,10 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
 
 ### Fixed
 
+- 🐛 Give the manylinux wheel builds a compiler cache that survives the run.
+  sccache installed in `before-all` writes inside the container, so a project
+  that enables it saw a 0% hit rate on every run; the cache directory is now
+  bind-mounted from the host and cached between runs ([#445])
 - 🐛 Actually install the package from the wheelhouse in
   `reusable-python-tests.yml`. A project that lists itself in
   `[tool.uv.sources]` as a workspace member is a path source, so `uv sync`
