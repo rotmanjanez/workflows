@@ -119,12 +119,33 @@ All compiler machinery (MSVC developer shell, the Ninja override, mold, sccache)
 and the "Free up space" steps are gone. Compiled projects instead pass the new
 `wheels-artifact` input, naming the artifact
 `reusable-python-packaging-wheel-cibuildwheel.yml` built for the same platform
-(including the `dev-` prefix on pull requests). The workflow downloads it and
-sets uv's `UV_FIND_LINKS`, `UV_NO_BUILD_PACKAGE`, and `UV_CONSTRAINT`, so
-sessions install the prebuilt wheel — pinned to the exact version found in the
-wheelhouse, so an empty or stale artifact fails the job instead of falling
-through to PyPI — with an unmodified noxfile. When empty, sessions build from
-source, as intended for pure-Python projects.
+(including the `dev-` prefix on pull requests). The workflow downloads it, sets
+uv's `UV_FIND_LINKS` and `UV_CONSTRAINT` — pinned to the exact version found in
+the wheelhouse, so an empty or stale artifact fails the job instead of falling
+through to PyPI — and exports `MQT_WHEELHOUSE` pointing at the directory. When
+no artifact is passed, none of these are set and sessions build from source, as
+intended for pure-Python projects.
+
+**This requires a change to the noxfile.** `uv sync` always installs the root
+project from the local tree, and no environment variable overrides that: not
+`UV_NO_SOURCES`, not `UV_NO_BUILD_PACKAGE`. A session that syncs the project
+therefore performs a full C++ build in every test job, wheelhouse or not. Guard
+the sync on `MQT_WHEELHOUSE` and install the package separately:
+
+```python
+if os.environ.get("MQT_WHEELHOUSE"):
+    session.run("uv", "sync", "--inexact", "--no-dev", "--no-install-project", env=env)
+    session.run("uv", "pip", "install", "--python", session.virtualenv.location,
+                "<package>", env=env)
+else:
+    session.run("uv", "sync", "--inexact", "--no-dev",
+                "--no-build-isolation-package", "<package>", env=env)
+```
+
+`UV_FIND_LINKS` and `UV_CONSTRAINT` then resolve `<package>` to the wheel that
+was just built. Anything the source build needed but the wheel path does not —
+installing `cmake` and `ninja`, for instance — should be skipped in the same
+branch.
 
 Sessions get a regular, non-editable install, so coverage is measured inside
 `site-packages` and Codecov would report zero diff coverage on pull requests.

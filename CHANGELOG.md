@@ -79,12 +79,11 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   sccache installed in `before-all` writes inside the container, so a project
   that enables it saw a 0% hit rate on every run; the cache directory is now
   bind-mounted from the host and cached between runs ([#445])
-- 🐛 Actually install the package from the wheelhouse in
-  `reusable-python-tests.yml`. A project that lists itself in
-  `[tool.uv.sources]` as a workspace member is a path source, so `uv sync`
-  rebuilt it from source in every test job and ignored the wheel that had just
-  been downloaded. Setting `UV_NO_SOURCES` makes it resolve from the wheelhouse
-  instead ([#445])
+- 🐛 Export `MQT_WHEELHOUSE` from `reusable-python-tests.yml` so sessions can
+  actually install the prebuilt wheel. `uv sync` always installs the root
+  project from the local tree, so the wheelhouse was ignored and every test job
+  performed a full C++ build; noxfiles must now branch on the variable and pass
+  `--no-install-project`. See [`UPGRADING.md`](UPGRADING.md) ([#445])
 
 ## [2.3.0] - 2026-08-24
 
