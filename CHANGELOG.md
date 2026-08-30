@@ -10,6 +10,13 @@ releases may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- 🐛 Give the manylinux wheel builds a compiler cache that survives the run.
+  sccache installed in `before-all` writes inside the container, so a project
+  that enables it saw a 0% hit rate on every run; the cache directory is now
+  bind-mounted from the host and cached between runs ([#445])
+
 ## [2.3.0] - 2026-08-24
 
 _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#230)._
@@ -522,6 +529,7 @@ _📚 Refer to the [GitHub Release Notes] for previous changelogs._
 
 <!-- PR links -->
 
+[#445]: https://github.com/munich-quantum-toolkit/workflows/pull/445
 [#442]: https://github.com/munich-quantum-toolkit/workflows/pull/442
 [#441]: https://github.com/munich-quantum-toolkit/workflows/pull/441
 [#434]: https://github.com/munich-quantum-toolkit/workflows/pull/434
