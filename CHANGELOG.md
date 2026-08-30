@@ -53,6 +53,10 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   debug MLIR download and shrinks the link inputs ([#445])
 - ⚡️ Raise the sccache budget in `reusable-cpp-tests.yml` to 1G, which the
   Windows debug build filled exactly ([#445])
+- ⚡️ Build the Windows wheels with native MSVC and Ninja in
+  `reusable-python-packaging-wheel-cibuildwheel.yml`. cibuildwheel picked the
+  Visual Studio generator, which ignores `CMAKE_<LANG>_COMPILER_LAUNCHER`, so
+  the sccache set up there recorded zero compile requests ([#445])
 - ⚡️ Save the pruned, uniquely-keyed uv caches on every run instead of only on
   `main` ([#445])
 - 🐛 Make the coverage artifact name in `reusable-python-tests.yml` unique per
