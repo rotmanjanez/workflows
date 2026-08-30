@@ -168,7 +168,12 @@ jobs:
         with:
           name: ${{ env.WHEELS }}
           path: ${{ runner.temp }}/wheelhouse
-      # `UV_FIND_LINKS` only adds a source; the version pin keeps a stale wheelhouse from falling through to PyPI
+      # `UV_FIND_LINKS` only adds a source; the version pin keeps a stale wheelhouse from falling through to PyPI.
+      # `UV_NO_SOURCES` is what actually makes the wheelhouse win: a project that lists itself in
+      # `[tool.uv.sources]` (`{ workspace = true }`, as every MQT repo does) is a path source, so `uv sync`
+      # rebuilds it from source and neither `UV_FIND_LINKS` nor `UV_NO_BUILD_PACKAGE` gets a say. Ignoring the
+      # sources table makes the package resolve from the wheelhouse like any other dependency, and
+      # `UV_NO_BUILD_PACKAGE` then turns a missing wheel into an error instead of a silent 20-minute rebuild.
       - if: ${{ env.WHEELS != '' }}
         name: Install from the wheelhouse
         shell: bash
@@ -180,6 +185,7 @@ jobs:
           {
             echo "UV_FIND_LINKS=$RUNNER_TEMP/wheelhouse"
             echo "UV_NO_BUILD_PACKAGE=$name"
+            echo "UV_NO_SOURCES=1"
             echo "UV_CONSTRAINT=$RUNNER_TEMP/wheelhouse-constraint.txt"
           } >> "$GITHUB_ENV"
 

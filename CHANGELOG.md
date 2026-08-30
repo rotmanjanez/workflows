@@ -73,6 +73,15 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   ([#445])
 - 🔥 Remove the `draft-sessions` input from `reusable-python-tests.yml` ([#445])
 
+### Fixed
+
+- 🐛 Actually install the package from the wheelhouse in
+  `reusable-python-tests.yml`. A project that lists itself in
+  `[tool.uv.sources]` as a workspace member is a path source, so `uv sync`
+  rebuilt it from source in every test job and ignored the wheel that had just
+  been downloaded. Setting `UV_NO_SOURCES` makes it resolve from the wheelhouse
+  instead ([#445])
+
 ## [2.3.0] - 2026-08-24
 
 _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#230)._
