@@ -76,10 +76,23 @@ jobs:
               "windows-arm": "windows-11-arm",
           }
 
+          # The free-threaded and GIL-enabled wheels share every line of C++ that is not a
+          # Python binding, but cibuildwheel builds them one after the other in a single job,
+          # so the second build reconfigures and relinks everything for the sake of a handful
+          # of binding translation units. Splitting them puts the two on separate runners:
+          # the compiler cache serves both, and the job takes as long as one build rather than
+          # two. `cp3??-*` matches cp311 through cp315 but not cp315t, whose identifier has
+          # three characters after `cp3`.
+          ABIS = [("gil", "cp3??-*"), ("ft", "cp3??t-*")]
+
+          def entries(platform, runner):
+              return [{"os": platform, "runs-on": runner, "abi": abi, "build-selector": sel}
+                      for abi, sel in ABIS]
+
           if os.environ["DRAFT"] == "true":
-              matrix = [{"os": "linux", "runs-on": RUNNERS["linux"]}]
+              matrix = entries("linux", RUNNERS["linux"])
           else:
-              matrix = [{"os": p, "runs-on": r} for p, r in RUNNERS.items()]
+              matrix = [e for p, r in RUNNERS.items() for e in entries(p, r)]
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"matrix={json.dumps({'include': matrix})}\n")
@@ -96,7 +109,7 @@ jobs:
     secrets: inherit # zizmor: ignore[secrets-inherit]
 
   wheels:
-    name: 📦 ${{ matrix.os }}
+    name: 📦 ${{ matrix.os }} ${{ matrix.abi }}
     needs: setup
     if: ${{ inputs.compiled }}
     strategy:
@@ -105,6 +118,8 @@ jobs:
     uses: ./.github/workflows/reusable-python-packaging-wheel-cibuildwheel.yml
     with:
       runs-on: ${{ matrix.runs-on }}
+      abi: ${{ matrix.abi }}
+      build-selector: ${{ matrix.build-selector }}
       setup-z3: ${{ inputs.setup-z3 }}
       z3-version: ${{ inputs.z3-version }}
       setup-mlir: ${{ inputs.setup-mlir }}

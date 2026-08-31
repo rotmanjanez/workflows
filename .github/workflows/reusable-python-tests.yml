@@ -134,7 +134,8 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       REPORT: ${{ matrix.coverage && format('coverage-{0}-{1}-{2}.xml', matrix.runs-on, matrix.python-version, matrix.session) || '' }}
-      WHEELS: ${{ inputs.compiled && format('{0}cibw-wheels-{1}', github.event_name == 'pull_request' && 'dev-' || '', matrix.runs-on) || '' }}
+      # a glob: the GIL and free-threaded wheels for one image are built by separate jobs
+      WHEELS: ${{ inputs.compiled && format('{0}cibw-wheels-*-{1}', github.event_name == 'pull_request' && 'dev-' || '', matrix.runs-on) || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -170,7 +171,8 @@ jobs:
         name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ env.WHEELS }}
+          pattern: ${{ env.WHEELS }}
+          merge-multiple: true
           path: ${{ runner.temp }}/wheelhouse
       # `UV_FIND_LINKS` only adds a source; the version pin keeps a stale wheelhouse from falling through to PyPI.
       #

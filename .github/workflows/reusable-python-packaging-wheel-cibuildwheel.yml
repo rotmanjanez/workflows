@@ -31,6 +31,14 @@ on:
         description: "The LLVM version to set up (formatted as 'major.minor.patch') or commit hash (minimum 7 characters, e.g., 'a832a52')"
         default: "21.1.8"
         type: string
+      build-selector:
+        description: "A `CIBW_BUILD` pattern narrowing which wheels this job builds. Empty builds everything the project configures."
+        default: ""
+        type: string
+      abi:
+        description: "A label for the selection above. It keeps the artifact name, the compiler cache and the concurrency group of two jobs building the same runner image apart."
+        default: ""
+        type: string
 
     # All optional, so that cross-organization callers (which cannot use
     # `secrets: inherit`) can pass them explicitly.
@@ -47,7 +55,7 @@ on:
         required: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-python-packaging-cibw-${{ inputs.runs-on }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-python-packaging-cibw-${{ inputs.runs-on }}${{ inputs.abi && format('-{0}', inputs.abi) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -55,7 +63,7 @@ permissions:
 
 jobs:
   build-wheel:
-    name: 🎡 ${{ inputs.runs-on }}
+    name: 🎡 ${{ inputs.runs-on }}${{ inputs.abi && format(' ({0})', inputs.abi) || '' }}
     runs-on: ${{ inputs.runs-on }}
     env:
       IQM_TOKEN: ${{ secrets.IQM_TOKEN }}
@@ -94,8 +102,8 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache
-          key: sccache-wheels-${{ inputs.runs-on }}-${{ github.run_id }}
-          restore-keys: sccache-wheels-${{ inputs.runs-on }}-
+          key: sccache-wheels-${{ inputs.runs-on }}-${{ inputs.abi }}-${{ github.run_id }}
+          restore-keys: sccache-wheels-${{ inputs.runs-on }}-${{ inputs.abi }}-
 
       - name: Set up MSVC
         if: ${{ startsWith(inputs.runs-on, 'windows') }}
@@ -207,6 +215,10 @@ jobs:
 
       # run cibuildwheel to build wheels for the specified Python version
       - uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
+        env:
+          # `CIBW_BUILD` narrows the project's own `build` setting; `skip` is a separate
+          # option, so the project's skips still apply.
+          CIBW_BUILD: ${{ inputs.build-selector }}
 
       # sccache flushes lazily, so the server must be stopped before the cache is saved.
       # cibuildwheel builds each interpreter in its own environment and the server may
@@ -234,5 +246,8 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ github.event_name == 'pull_request' && 'dev-' || '' }}cibw-wheels-${{ inputs.runs-on }}
+          # The ABI goes before the runner image so that a consumer can glob for every ABI of one
+          # image: `cibw-wheels-*-ubuntu-24.04` cannot accidentally match `...-ubuntu-24.04-arm`,
+          # which a trailing suffix would.
+          name: ${{ github.event_name == 'pull_request' && 'dev-' || '' }}cibw-wheels-${{ inputs.abi && format('{0}-', inputs.abi) || '' }}${{ inputs.runs-on }}
           path: wheelhouse/*.whl
