@@ -148,8 +148,12 @@ jobs:
         with:
           version: ${{ inputs.z3-version }}
 
+      # MLIR is a build dependency. When the wheelhouse is in use nothing is compiled here -- the
+      # job installs a repaired wheel, which already carries its shared libraries -- so setting it
+      # up costs 20-70s per job and buys nothing. It is still needed on the fallback path, where
+      # the noxfile builds the project from source.
       - name: Set up MLIR
-        if: ${{ inputs.setup-mlir }}
+        if: ${{ inputs.setup-mlir && env.WHEELS == '' }}
         uses: munich-quantum-software/setup-mlir@3f32263ce571a8b745068980f30f188b6e800763 # v1.4.2
         with:
           llvm-version: ${{ inputs.llvm-version }}
