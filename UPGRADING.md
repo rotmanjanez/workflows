@@ -120,36 +120,36 @@ and the separate sdist and wheel jobs. Drafts build the Linux wheel only.
 ### `reusable-python-tests.yml` tests prebuilt wheels instead of compiling
 
 All compiler machinery (MSVC developer shell, the Ninja override, mold, sccache)
-and the "Free up space" steps are gone. Compiled projects instead pass the new
-`wheels-artifact` input, naming the artifact
-`reusable-python-packaging-wheel-cibuildwheel.yml` built for the same platform
-(including the `dev-` prefix on pull requests). The workflow downloads it, sets
-uv's `UV_FIND_LINKS` and `UV_CONSTRAINT` — pinned to the exact version found in
-the wheelhouse, so an empty or stale artifact fails the job instead of falling
-through to PyPI — and exports `MQT_WHEELHOUSE` pointing at the directory. When
-no artifact is passed, none of these are set and sessions build from source, as
-intended for pure-Python projects.
+and the "Free up space" steps are gone. For `compiled: true` projects the
+workflow downloads the wheels `reusable-python-build.yml` built for the same
+runner image and exports `MQT_WHEELHOUSE` pointing at the directory, along with
+three uv settings: `UV_FIND_LINKS` adds the wheelhouse as a source,
+`UV_CONSTRAINT` pins the exact version found there so a stale wheelhouse cannot
+fall through to PyPI, and `UV_NO_BUILD_PACKAGE` names the project so uv refuses
+to build it from the tree. Pure-Python projects get none of these and their
+sessions install from source as before.
 
 **This requires a change to the noxfile.** `uv sync` always installs the root
-project from the local tree, and no environment variable overrides that: not
-`UV_NO_SOURCES`, not `UV_NO_BUILD_PACKAGE`. A session that syncs the project
-therefore performs a full C++ build in every test job, wheelhouse or not. Guard
-the sync on `MQT_WHEELHOUSE` and install the package separately:
+project from the local tree, and a session that syncs it compiles the project in
+every test job. With `UV_NO_BUILD_PACKAGE` set that sync fails instead, with
+"marked as `--no-build` but has no binary distribution", so an unadapted noxfile
+is caught rather than silently slow. Exclude the project from the sync and
+install it separately:
 
 ```python
-if os.environ.get("MQT_WHEELHOUSE"):
-    session.run("uv", "sync", "--inexact", "--no-dev", "--no-install-project", env=env)
+if "MQT_WHEELHOUSE" in os.environ:
+    session.run("uv", "sync", "--no-dev", "--group", "test",
+                "--no-install-project", env=env)
     session.run("uv", "pip", "install", "--python", session.virtualenv.location,
                 "<package>", env=env)
 else:
-    session.run("uv", "sync", "--inexact", "--no-dev",
-                "--no-build-isolation-package", "<package>", env=env)
+    # the source build as before: build dependencies first, then the project
+    ...
 ```
 
-`UV_FIND_LINKS` and `UV_CONSTRAINT` then resolve `<package>` to the wheel that
-was just built. Anything the source build needed but the wheel path does not —
-installing `cmake` and `ninja`, for instance — should be skipped in the same
-branch.
+`UV_FIND_LINKS` and `UV_CONSTRAINT` resolve `<package>` to the wheel that was
+just built. Anything only the source build needs — `cmake`, `ninja`, the `build`
+dependency group — belongs in the other branch.
 
 Sessions get a regular, non-editable install, so coverage is measured inside
 `site-packages` and Codecov would report zero diff coverage on pull requests.
@@ -157,7 +157,7 @@ Map the paths back in `pyproject.toml`:
 
 ```toml
 [tool.coverage.paths]
-source = ["src/<package>", "*/site-packages/<package>"]
+source = ["python/mqt/<package>", "*/site-packages/mqt/<package>"]
 ```
 
 Sessions that relied on an editable install (importing test helpers from the

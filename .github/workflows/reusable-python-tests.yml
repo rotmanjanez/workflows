@@ -175,28 +175,39 @@ jobs:
           pattern: ${{ env.WHEELS }}
           merge-multiple: true
           path: ${{ runner.temp }}/wheelhouse
-      # `UV_FIND_LINKS` only adds a source; the version pin keeps a stale wheelhouse from falling through to PyPI.
+      # Every wheel in the artifact belongs to this project, so the filenames carry the
+      # distribution name and version. `UV_FIND_LINKS` adds the wheelhouse as a source and
+      # `UV_CONSTRAINT` pins the version, so a stale wheelhouse cannot fall through to PyPI.
       #
-      # `MQT_WHEELHOUSE` is the contract with the caller's noxfile, and it has to be honoured for any of this
-      # to have an effect: `uv sync` always installs the root project from the local tree, and no environment
-      # variable overrides that -- not `UV_NO_SOURCES`, not `UV_NO_BUILD_PACKAGE`. A noxfile that syncs the
-      # project rebuilds it in every single test job no matter what is set here. When `MQT_WHEELHOUSE` is
-      # present, the session must pass `--no-install-project` to `uv sync` and install the package separately,
-      # at which point `UV_FIND_LINKS` and `UV_CONSTRAINT` resolve it to the wheel that was just built.
-      # See `UPGRADING.md` for the noxfile side of this.
+      # `uv sync` always installs the root project from the local tree, wheelhouse or not.
+      # `UV_NO_BUILD_PACKAGE` makes uv refuse to build it, so a noxfile that does not honour
+      # `MQT_WHEELHOUSE` fails ("marked as `--no-build` but has no binary distribution")
+      # instead of silently compiling in every test job. The session has to exclude the
+      # project from the sync and install it separately; see UPGRADING.md.
       - if: ${{ env.WHEELS != '' }}
         name: Install from the wheelhouse
         shell: bash
         run: |
-          info=$(uv run --no-project --python 3.13 python -c 'import pathlib, re, sys, tomllib; p = tomllib.loads(pathlib.Path("pyproject.toml").read_text()).get("project", {}); name = p.get("name") or sys.exit("pyproject.toml has no [project].name"); c = re.sub(r"[-_.]+", "_", name).lower(); v = sorted({f.name.split("-")[1] for f in pathlib.Path(sys.argv[1]).glob("*.whl") if f.name.split("-")[0].lower() == c}); sys.exit(f"no {name} wheel in the wheelhouse: the artifact is empty or holds another project") if not v else None; sys.exit(f"the wheelhouse holds several {name} versions: {v}") if len(v) > 1 else None; print(name, v[0])' "$RUNNER_TEMP/wheelhouse")
-          read -r name version <<< "$info"
+          shopt -s nullglob
+          wheels=("$RUNNER_TEMP"/wheelhouse/*.whl)
+          if (( ${#wheels[@]} == 0 )); then
+            echo "::error::the wheelhouse is empty"
+            exit 1
+          fi
+          IFS=- read -r name version _ <<< "$(basename "${wheels[0]}")"
+          for wheel in "${wheels[@]}"; do
+            if [[ "$(basename "$wheel")" != "$name-$version-"* ]]; then
+              echo "::error::the wheelhouse mixes distributions or versions: $(basename "$wheel")"
+              exit 1
+            fi
+          done
           echo "Testing $name==$version from the wheelhouse"
           echo "$name==$version" > "$RUNNER_TEMP/wheelhouse-constraint.txt"
           {
             echo "MQT_WHEELHOUSE=$RUNNER_TEMP/wheelhouse"
             echo "UV_FIND_LINKS=$RUNNER_TEMP/wheelhouse"
-            echo "UV_NO_BUILD_PACKAGE=$name"
             echo "UV_CONSTRAINT=$RUNNER_TEMP/wheelhouse-constraint.txt"
+            echo "UV_NO_BUILD_PACKAGE=$name"
           } >> "$GITHUB_ENV"
 
       - name: 🐍 Test

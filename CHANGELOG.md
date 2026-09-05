@@ -83,7 +83,8 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   actually install the prebuilt wheel. `uv sync` always installs the root
   project from the local tree, so the wheelhouse was ignored and every test job
   performed a full C++ build; noxfiles must now branch on the variable and pass
-  `--no-install-project`. See [`UPGRADING.md`](UPGRADING.md) ([#445])
+  `--no-install-project`. `UV_NO_BUILD_PACKAGE` makes a noxfile that does not
+  fail instead of compiling. See [`UPGRADING.md`](UPGRADING.md) ([#445])
 - 🐛 Drop Windows ARM from the Python test matrix: Qiskit publishes no arm64
   Windows wheels, so no test session can install there. The wheel build still
   smoke-tests the arm64 wheel ([#445])
