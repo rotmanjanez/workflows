@@ -84,6 +84,9 @@ _If you are upgrading: please see [`UPGRADING.md`](UPGRADING.md#unreleased)._
   project from the local tree, so the wheelhouse was ignored and every test job
   performed a full C++ build; noxfiles must now branch on the variable and pass
   `--no-install-project`. See [`UPGRADING.md`](UPGRADING.md) ([#445])
+- 🐛 Drop Windows ARM from the Python test matrix: Qiskit publishes no arm64
+  Windows wheels, so no test session can install there. The wheel build still
+  smoke-tests the arm64 wheel ([#445])
 
 ## [2.3.0] - 2026-08-24
 

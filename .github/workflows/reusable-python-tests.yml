@@ -86,12 +86,13 @@ jobs:
         run: |
           import json, os
 
+          # No Windows ARM: Qiskit publishes no arm64 Windows wheels, so no test session
+          # can install its dependencies there. The wheel build smoke-tests that wheel.
           RUNNERS = {
               "linux": "ubuntu-24.04",
               "linux-arm": "ubuntu-24.04-arm",
               "macos": "macos-26",
               "windows": "windows-2025",
-              "windows-arm": "windows-11-arm",
           }
 
           versions = json.loads(os.environ["PYTHON_VERSIONS"])

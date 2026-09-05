@@ -85,9 +85,13 @@ python-tests:
 
 `python-versions` (default `'["3.11", "3.12", "3.13", "3.14"]'`, oldest first)
 sets the interpreter window; the shape of the matrix is not configurable. Linux
-(x86) runs every listed version, the other four platforms run the oldest and the
-newest, and `minimums` runs on Linux and Windows (x86) at those two boundaries.
-Drafts run one job on the newest interpreter. Coverage runs here too.
+(x86) runs every listed version. Linux ARM, macOS, and Windows run the oldest
+and newest versions. Windows ARM is not part of the test matrix: Qiskit
+publishes no arm64 Windows wheels, so no test session can install its
+dependencies there. Compiled projects still smoke-test their arm64 Windows wheel
+in the build workflow. The `minimums` session runs on Linux and Windows (x86) at
+the two boundaries. Drafts run one job on the newest interpreter. Coverage runs
+here too.
 
 `runs-on`, `python-version`, `sessions`, and `wheels-artifact` are gone. So is
 `draft-sessions`, which now fails the run instead of silently promoting drafts
